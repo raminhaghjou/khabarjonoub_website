@@ -17,18 +17,16 @@
                                     <span>MP4</span>
                                     <span>WEBM</span>
                                 </p>
-                                <p class="dm-upload-icon">
-                                    <i class="fa fa-cloud-upload"></i>
-                                </p>
+                                <p class="dm-upload-icon"><i class="fa fa-cloud-upload"></i></p>
                                 <p class="dm-upload-text"><?= trans("drag_drop_files_here"); ?></p>
                                 <p class="text-center">
-                                    <button class="btn btn-default btn-browse-files"><?= trans('browse_files'); ?></button>
+                                    <button type="button" class="btn btn-default btn-browse-files"><?= trans('browse_files'); ?></button>
                                 </p>
                                 <a class='btn btn-md dm-btn-select-files'>
-                                    <input type="file" name="file" size="40" multiple="multiple">
+                                    <input type="file" id="video_file_input" name="file" size="40" accept="video/mp4,video/webm,.mp4,.webm">
                                 </a>
                                 <ul class="dm-uploaded-files" id="files-video"></ul>
-                                <button type="button" id="btn_reset_upload_video" class="btn btn-reset-upload"><?= trans("reset"); ?></button>
+                                <button type="button" id="btn_reset_upload_video" class="btn btn-reset-upload" style="display:none;"><?= trans("reset"); ?></button>
                             </div>
                         </div>
                     </div>
@@ -71,62 +69,24 @@
 </script>
 
 <script>
+(function ($) {
     $(function () {
-        $('#drag-and-drop-zone-video').dmUploader({
-            url: '<?= base_url("FileController/uploadVideo"); ?>',
-            queue: true,
-            allowedTypes: 'video/*',
-            extFilter: ["mp4", "webm"],
-            extraData: function (id) {
-                return {
-                    "file_id": id,
-                    '<?= csrf_token() ?>': getCsrfHash()
-                };
-            },
-            onDragEnter: function () {
-                this.addClass('active');
-            },
-            onDragLeave: function () {
-                this.removeClass('active');
-            },
-            onNewFile: function (id, file) {
-                ui_multi_add_file(id, file, "video");
-            },
-            onBeforeUpload: function (id) {
-                $('#uploaderFile' + id + ' .dm-progress-waiting').hide();
-                ui_multi_update_file_progress(id, 0, '', true);
-                ui_multi_update_file_status(id, 'uploading', 'Uploading...');
-                $("#btn_reset_upload_video").show();
-            },
-            onUploadProgress: function (id, percent) {
-                ui_multi_update_file_progress(id, percent);
-            },
-            onUploadSuccess: function (id, data) {
-                refresh_videos();
-                document.getElementById("uploaderFile" + id).remove();
-                ui_multi_update_file_status(id, 'success', 'Upload Complete');
-                ui_multi_update_file_progress(id, 100, 'success', false);
-                $("#btn_reset_upload_video").hide();
-            },
-            onFileTypeError: function (file) {
-                swal({
-                    text: "<?= trans("invalid_file_type");?>",
-                    icon: "warning",
-                    button: VrConfig.textOk
-                });
-            },
-            onFileExtError: function (file) {
-                swal({
-                    text: "<?= trans("invalid_file_type");?>",
-                    icon: "warning",
-                    button: VrConfig.textOk
-                });
-            }
+        if (typeof VrChunkUploader !== 'function') {
+            console.error('VrChunkUploader missing');
+            return;
+        }
+        var uploader = VrChunkUploader({
+            uploadUrl: '<?= base_url("FileController/uploadChunk") ?>',
+            uploadType: 'video',
+            csrfName: '<?= csrf_token() ?>',
+            csrfHash: '<?= csrf_hash() ?>',
+            invalidTypeText: '<?= clrQuotes(trans("invalid_file_type")) ?>',
+            acceptExt: ['mp4', 'webm'],
+            listSelector: '#files-video',
+            resetBtnSelector: '#btn_reset_upload_video',
+            onComplete: function () { refresh_videos(); }
         });
+        uploader.bindZone('#drag-and-drop-zone-video', '#video_file_input');
     });
-    $(document).on('click', '#btn_reset_upload_video', function () {
-        $("#drag-and-drop-zone-video").dmUploader("reset");
-        $("#files-video").empty();
-        $(this).hide();
-    });
+}(jQuery));
 </script>

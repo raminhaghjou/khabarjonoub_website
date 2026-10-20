@@ -167,7 +167,7 @@ class UploadModel extends BaseModel
     //upload video
     public function uploadVideo($inputName)
     {
-        $directory = $this->createUploadDirectory('profile');
+        $directory = $this->createUploadDirectory('videos');
         return $this->upload($inputName, 'uploads/videos/' . $directory, 'video_');
     }
 
@@ -235,6 +235,250 @@ class UploadModel extends BaseModel
             @copy(FCPATH . "uploads/index.html", $directoryPath . "index.html");
         }
         return $directory . '/';
+    }
+
+    private function chunkUploadDir($uploadId): string
+    {
+        return FCPATH . 'uploads/tmp/chunks/' . $uploadId . '/';
+    }
+
+    private function readChunkMeta(string $dir): array
+    {
+        $metaPath = $dir . 'meta.json';
+        $meta = ['next' => 0];
+        if (is_file($metaPath)) {
+            $decoded = json_decode((string) @file_get_contents($metaPath), true);
+            if (is_array($decoded)) {
+                $meta = array_merge($meta, $decoded);
+            }
+        }
+        $meta['next'] = (int) ($meta['next'] ?? 0);
+        return $meta;
+    }
+
+    private function writeChunkMeta(string $dir, array $meta): bool
+    {
+        return @file_put_contents($dir . 'meta.json', json_encode($meta), LOCK_EX) !== false;
+    }
+
+    //append each chunk into one data.bin so finalize is a fast rename/copy
+    public function saveUploadChunk($inputName, $uploadId, $chunkIndex)
+    {
+        $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) $uploadId);
+        if ($uploadId === '' || strlen($uploadId) > 80) {
+            return false;
+        }
+        $chunkIndex = (int) $chunkIndex;
+        if ($chunkIndex < 0) {
+            return false;
+        }
+
+        $dir = $this->chunkUploadDir($uploadId);
+        if (!is_dir($dir)) {
+            if (!@mkdir($dir, 0755, true) && !is_dir($dir)) {
+                log_message('error', 'Chunk dir create failed: ' . $dir);
+                return false;
+            }
+        }
+
+        $file = $this->request->getFile($inputName);
+        if (empty($file) || !$file->isValid()) {
+            log_message('error', 'Invalid upload chunk for ' . $uploadId);
+            return false;
+        }
+
+        $meta = $this->readChunkMeta($dir);
+        $next = (int) ($meta['next'] ?? 0);
+
+        // Already accepted (client retry after success response was lost)
+        if ($chunkIndex < $next) {
+            return true;
+        }
+        if ($chunkIndex !== $next) {
+            log_message('error', 'Out-of-order chunk for ' . $uploadId . ': got ' . $chunkIndex . ', expected ' . $next);
+            return false;
+        }
+
+        // Stage to a part file first so retries overwrite safely
+        $partPath = $dir . $chunkIndex . '.part';
+        $tmpName = $file->getTempName();
+        try {
+            if (!$file->hasMoved()) {
+                $file->move($dir, $chunkIndex . '.part', true);
+            } elseif (!is_file($partPath) && is_file($tmpName)) {
+                @copy($tmpName, $partPath);
+            }
+        } catch (\Throwable $e) {
+            if (is_file($tmpName) && !@copy($tmpName, $partPath)) {
+                log_message('error', 'Chunk stage failed: ' . $e->getMessage());
+                return false;
+            }
+        }
+        if (!is_file($partPath)) {
+            log_message('error', 'Missing staged chunk for ' . $uploadId);
+            return false;
+        }
+
+        $dataPath = $dir . 'data.bin';
+        $beforeSize = is_file($dataPath) ? (int) filesize($dataPath) : 0;
+        $in = @fopen($partPath, 'rb');
+        $out = @fopen($dataPath, 'ab');
+        if ($in === false || $out === false) {
+            if ($in !== false) {
+                fclose($in);
+            }
+            if ($out !== false) {
+                fclose($out);
+            }
+            log_message('error', 'Cannot open chunk streams for ' . $uploadId);
+            return false;
+        }
+
+        $copied = @stream_copy_to_stream($in, $out);
+        fclose($in);
+        fclose($out);
+        if ($copied === false) {
+            if (is_file($dataPath)) {
+                $fh = @fopen($dataPath, 'c+b');
+                if ($fh) {
+                    @ftruncate($fh, $beforeSize);
+                    fclose($fh);
+                }
+            }
+            log_message('error', 'Chunk append failed for ' . $uploadId);
+            return false;
+        }
+
+        $meta['next'] = $chunkIndex + 1;
+        if (!$this->writeChunkMeta($dir, $meta)) {
+            $fh = @fopen($dataPath, 'c+b');
+            if ($fh) {
+                @ftruncate($fh, $beforeSize);
+                fclose($fh);
+            }
+            log_message('error', 'Chunk meta write failed for ' . $uploadId);
+            return false;
+        }
+
+        @unlink($partPath);
+        return true;
+    }
+
+    //move assembled data.bin (or legacy .part files) into the final uploads folder
+    public function finalizeChunkedUpload($uploadId, $originalName, $targetFolder, $namePrefix, $keepOrjName = false, $totalChunks = 0)
+    {
+        $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) $uploadId);
+        $dir = $this->chunkUploadDir($uploadId);
+        if ($uploadId === '' || !is_dir($dir)) {
+            return null;
+        }
+
+        $dataPath = $dir . 'data.bin';
+        $meta = $this->readChunkMeta($dir);
+        $assembled = is_file($dataPath);
+        $parts = [];
+
+        if ($assembled) {
+            if ($totalChunks > 0 && (int) ($meta['next'] ?? 0) < $totalChunks) {
+                log_message('error', 'Chunk finalize incomplete for ' . $uploadId);
+                return null;
+            }
+        } else {
+            // Legacy fallback: many .part files from older uploader
+            $parts = glob($dir . '*.part') ?: [];
+            if (empty($parts)) {
+                return null;
+            }
+            natsort($parts);
+            $parts = array_values($parts);
+            if ($totalChunks > 0 && count($parts) < $totalChunks) {
+                log_message('error', 'Chunk finalize incomplete for ' . $uploadId);
+                return null;
+            }
+        }
+
+        $orjName = !empty($originalName) ? $originalName : ('file_' . $uploadId);
+        $name = pathinfo($orjName, PATHINFO_FILENAME);
+        $ext = pathinfo($orjName, PATHINFO_EXTENSION);
+        $name = strSlug($name);
+        if (empty($name)) {
+            $name = generateToken();
+        }
+        if (empty($ext)) {
+            $ext = 'bin';
+        }
+
+        $directory = $this->createUploadDirectory($targetFolder);
+        $baseDir = 'uploads/' . $targetFolder . '/' . $directory;
+        $targetDir = FCPATH . $baseDir;
+        if (!is_dir($targetDir) && !@mkdir($targetDir, 0755, true) && !is_dir($targetDir)) {
+            return null;
+        }
+
+        $uniqiName = $namePrefix . generateToken() . '.' . $ext;
+        if ($keepOrjName === true) {
+            $fullName = $name . '.' . $ext;
+            if (file_exists($targetDir . $fullName)) {
+                $fullName = $name . '-' . uniqid() . '.' . $ext;
+            }
+            $uniqiName = $fullName;
+        }
+
+        $finalPath = $targetDir . $uniqiName;
+        if ($assembled) {
+            if (!@rename($dataPath, $finalPath)) {
+                if (!@copy($dataPath, $finalPath)) {
+                    return null;
+                }
+                @unlink($dataPath);
+            }
+        } else {
+            $out = @fopen($finalPath, 'wb');
+            if ($out === false) {
+                return null;
+            }
+            foreach ($parts as $part) {
+                $in = @fopen($part, 'rb');
+                if ($in === false) {
+                    fclose($out);
+                    @unlink($finalPath);
+                    return null;
+                }
+                stream_copy_to_stream($in, $out);
+                fclose($in);
+            }
+            fclose($out);
+        }
+
+        $this->deleteChunkedUpload($uploadId);
+
+        return [
+            'name' => $uniqiName,
+            'orjName' => $orjName,
+            'path' => $baseDir . $uniqiName,
+            'ext' => $ext
+        ];
+    }
+
+    //delete incomplete chunked upload
+    public function deleteChunkedUpload($uploadId)
+    {
+        $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) $uploadId);
+        if ($uploadId === '') {
+            return;
+        }
+        $dir = $this->chunkUploadDir($uploadId);
+        if (!is_dir($dir)) {
+            $legacy = FCPATH . 'uploads/tmp/chunks/' . $uploadId . '.part';
+            if (is_file($legacy)) {
+                @unlink($legacy);
+            }
+            return;
+        }
+        foreach (glob($dir . '*') ?: [] as $file) {
+            @unlink($file);
+        }
+        @rmdir($dir);
     }
 
     //check allowed file types

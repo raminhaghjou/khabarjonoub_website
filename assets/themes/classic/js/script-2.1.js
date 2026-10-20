@@ -177,7 +177,7 @@ $(document).ready(function () {
             success: function (response) {
                 var obj = JSON.parse(response);
                 if (obj.result == 1) {
-                    location.reload();
+                    window.location.href = obj.redirect_url || window.location.href;
                 } else if (obj.result == 0) {
                     document.getElementById("result-login").innerHTML = obj.error_message;
                 }

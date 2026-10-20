@@ -5,6 +5,7 @@ namespace Config;
 use App\Models\PostModel;
 use CodeIgniter\Config\BaseConfig;
 use \App\Models\AuthModel;
+use App\Libraries\AuthCookie;
 
 class Globals extends BaseConfig
 {
@@ -63,7 +64,6 @@ class Globals extends BaseConfig
         if (empty(self::$activeLang)) {
             self::$activeLang = self::$defaultLang;
         }
-        $session->set('activeLangId', self::$activeLang->id);
         //set language base URL
         self::$langBaseUrl = base_url(self::$activeLang->short_form);
         if (self::$activeLang->id == self::$defaultLang->id) {
@@ -71,12 +71,39 @@ class Globals extends BaseConfig
         }
         //set settings
         self::$settings = self::$db->table('settings')->where('lang_id', self::$activeLang->id)->get()->getRow();
+
+        // Avoid rewriting the session file on every request when nothing changed.
+        // Extra writes race with login persistence on CI 4.2 FileHandler / PHP 8.2.
+        if ((string) $session->get('activeLangId') !== (string) self::$activeLang->id) {
+            $session->set('activeLangId', self::$activeLang->id);
+        }
         //authentication
-        if (!empty($session->get('vr_ses_id')) && !empty($session->get('vr_ses_role')) && !empty($session->get('vr_ses_pass'))) {
-            $user = self::$db->table('users')->where('id', cleanNumber($session->get('vr_ses_id')))->get()->getRow();
-            if (!empty($user) && md5($user->password ?? '') == $session->get('vr_ses_pass')) {
+        $sesId = $session->get('vr_ses_id');
+        $sesRole = $session->get('vr_ses_role');
+        $sesPass = $session->get('vr_ses_pass');
+        if (!empty($sesId) && $sesRole !== null && $sesRole !== '' && !empty($sesPass)) {
+            $user = self::$db->table('users')->where('id', cleanNumber($sesId))->get()->getRow();
+            if (!empty($user) && (int) $user->status === 1 && md5($user->password ?? '') == $sesPass) {
                 self::$authCheck = true;
                 self::$authUser = $user;
+            }
+        }
+        // CI 4.2 FileHandler can lose session data on PHP 8.2. Recover the
+        // authenticated user from a short-lived, signed, host-only cookie.
+        if (!self::$authCheck) {
+            $user = AuthCookie::getUser(self::$db);
+            if (!empty($user)) {
+                self::$authCheck = true;
+                self::$authUser = $user;
+                $authData = [
+                    'vr_ses_id' => $user->id,
+                    'vr_ses_role' => $user->role,
+                    'vr_ses_pass' => md5($user->password ?? '')
+                ];
+                $session->set($authData);
+                foreach ($authData as $key => $value) {
+                    $_SESSION[$key] = $value;
+                }
             }
         }
     }

@@ -4,15 +4,16 @@ use CodeIgniter\Model;
 
 class PostModel extends BaseModel
 {
+    protected $sliderPostsLimit = 20;
+    protected $breakingPostsLimit = 20;
+    protected $popularPostsLimit = 5;
+    protected $recommendedPostsLimit = 5;
+
     public function __construct()
     {
         parent::__construct();
 
         $this->builder = $this->db->table('posts');
-        $this->sliderPostsLimit = 20;
-        $this->breakingPostsLimit = 20;
-        $this->popularPostsLimit = 5;
-        $this->recommendedPostsLimit = 5;
     }
 
     //build sql query

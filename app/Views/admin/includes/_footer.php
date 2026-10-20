@@ -20,6 +20,33 @@
 <script src="<?= base_url('assets/admin/plugins/tagsinput/jquery.tagsinput.min.js'); ?>"></script>
 <script src="<?= base_url('assets/admin/plugins/file-uploader/js/jquery.dm-uploader.min.js'); ?>"></script>
 <script src="<?= base_url('assets/admin/plugins/file-uploader/js/ui.js'); ?>"></script>
+<script>
+    (function () {
+        var original = window.getCsrfHash;
+        window.getCsrfHash = function () {
+            var value = typeof original === 'function' ? original() : '';
+            if (value) {
+                return value;
+            }
+            var names = [];
+            if (window.VrConfig && VrConfig.csrfCookieName) {
+                names.push(VrConfig.csrfCookieName, 'vr' + VrConfig.csrfCookieName);
+            }
+            names.push('app_csrf_cookie', 'vrapp_csrf_cookie');
+            var parts = decodeURIComponent(document.cookie || '').split(';');
+            for (var n = 0; n < names.length; n++) {
+                var prefix = names[n] + '=';
+                for (var i = 0; i < parts.length; i++) {
+                    var c = parts[i].replace(/^\s+/, '');
+                    if (c.indexOf(prefix) === 0 && c.length > prefix.length) {
+                        return c.substring(prefix.length);
+                    }
+                }
+            }
+            return '';
+        };
+    })();
+</script>
 <script src="<?= base_url('assets/admin/js/plugins.js'); ?>"></script>
 <script src="<?= base_url('assets/admin/plugins/colorpicker/bootstrap-colorpicker.min.js'); ?>"></script>
 <script src="<?= base_url('assets/vendor/bootstrap-datetimepicker/moment.min.js'); ?>"></script>

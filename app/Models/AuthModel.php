@@ -1,9 +1,13 @@
 <?php namespace App\Models;
 
 use CodeIgniter\Model;
+use App\Libraries\AuthCookie;
 
 class AuthModel extends BaseModel
 {
+    protected $builder;
+    protected $builderRoles;
+
     public function __construct()
     {
         parent::__construct();
@@ -33,7 +37,13 @@ class AuthModel extends BaseModel
             if ($user->status == 0) {
                 return 'banned';
             }
-            $this->loginUser($user);
+            // id 0 comes from a broken AUTO_INCREMENT and breaks every auth check.
+            if ((int) $user->id < 1) {
+                return 'invalid_account';
+            }
+            if (!$this->loginUser($user)) {
+                return false;
+            }
             return "success";
         }
         return false;
@@ -49,7 +59,18 @@ class AuthModel extends BaseModel
                 'vr_ses_pass' => md5($user->password ?? '')
             );
             $this->session->set($userData);
+            // Keep compatibility with the older CI 4.2 session container on PHP 8.2.
+            foreach ($userData as $key => $value) {
+                $_SESSION[$key] = $value;
+            }
+            // AuthCookie is the durable login proof across redirects when FileHandler
+            // drops vr_ses_* values. Treat issue failure as login failure.
+            if (!AuthCookie::issue($user)) {
+                return false;
+            }
+            return $this->session->get('vr_ses_id') == $user->id;
         }
+        return false;
     }
 
     //login with facebook
@@ -204,6 +225,13 @@ class AuthModel extends BaseModel
         $data['created_at'] = date('Y-m-d H:i:s');
         if ($this->builder->insert($data)) {
             $id = $this->db->insertID();
+            if ((int) $id < 1) {
+                if (!$this->ensureValidUserId($id, $data['email'])) {
+                    return false;
+                }
+                $created = $this->getUserByEmail($data['email']);
+                $id = !empty($created) ? $created->id : 0;
+            }
             $user = $this->getUser($id);
             if ($this->generalSettings->email_verification == 1 && !empty($user)) {
                 $data['email_status'] = 0;
@@ -230,10 +258,46 @@ class AuthModel extends BaseModel
         $data['status'] = 1;
         $data['email_status'] = 1;
         $data['token'] = generateToken();
-        $data['role'] = inputPost('role');
+        $data['role'] = cleanStr(inputPost('role'));
+        if (empty($this->getRoleByKey($data['role']))) {
+            return false;
+        }
         $data['last_seen'] = date('Y-m-d H:i:s');
         $data['created_at'] = date('Y-m-d H:i:s');
-        return $this->builder->insert($data);
+        if (!$this->builder->insert($data)) {
+            return false;
+        }
+        return $this->ensureValidUserId($this->db->insertID(), $data['email']);
+    }
+
+    /**
+     * A users.id of 0 means the column lost AUTO_INCREMENT on this database.
+     * Such an account can never authenticate, so give it a real id.
+     */
+    protected function ensureValidUserId($insertId, $email)
+    {
+        if ((int) $insertId > 0) {
+            return true;
+        }
+
+        $row = $this->db->table('users')->selectMax('id', 'max_id')->get()->getRow();
+        $newId = (int) (!empty($row) ? $row->max_id : 0) + 1;
+        if ($newId < 1) {
+            $newId = 1;
+        }
+
+        $updated = $this->db->table('users')
+            ->where('id', 0)
+            ->where('email', removeForbiddenCharacters($email))
+            ->update(['id' => $newId]);
+
+        if (!$updated) {
+            // Never leave an unusable id=0 account behind.
+            $this->db->table('users')->where('id', 0)->where('email', removeForbiddenCharacters($email))->delete();
+            return false;
+        }
+
+        return true;
     }
 
     //generate unique username
@@ -280,6 +344,7 @@ class AuthModel extends BaseModel
         $this->session->remove('vr_ses_id');
         $this->session->remove('vr_ses_role');
         $this->session->remove('vr_ses_pass');
+        AuthCookie::clear();
     }
 
     //reset password
@@ -313,7 +378,8 @@ class AuthModel extends BaseModel
     public function changeUserRole($id, $role)
     {
         $user = $this->getUser($id);
-        if (!empty($user)) {
+        $role = cleanStr($role);
+        if (!empty($user) && !empty($this->getRoleByKey($role))) {
             return $this->builder->where('id', $user->id)->update(['role' => $role]);
         }
         return false;

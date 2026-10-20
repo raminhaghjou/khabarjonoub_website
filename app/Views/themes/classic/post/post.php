@@ -51,9 +51,9 @@
                             
                             <?php use App\Libraries\jdf; ?>
                             <?php if ($generalSettings->show_post_date == 1): ?>
-                                <span class="sp-left"><? $this->jdf = new jdf(); echo $this->jdf->jdate("تاریخ: Y/m/d - ساعت: H:i", strtotime($post->created_at));  ?></span>
+                                <span class="sp-left"><?php $jdf = new \App\Libraries\jdf(); echo $jdf->jdate("تاریخ: Y/m/d - H:i", strtotime($post->created_at)); ?></span>
                                 <?php if (false && !empty($post->updated_at)): ?>
-                                    <span class="sp-left sp-post-update-date"><?= trans("updated"); ?>:&nbsp;<? $this->jdf = new jdf(); echo $this->jdf->jdate(" Y/m/d - H:i", strtotime($post->updated_at));  ?>&nbsp;-&nbsp;<?= formatDateFront($post->updated_at); ?>&nbsp;-&nbsp;<?= formatHour($post->updated_at); ?></span>
+                                    <span class="sp-left sp-post-update-date"><?= trans("updated"); ?>:&nbsp;<?php $jdf = new \App\Libraries\jdf(); echo $jdf->jdate(" Y/m/d - H:i", strtotime($post->updated_at)); ?>&nbsp;-&nbsp;<?= formatDateFront($post->updated_at); ?>&nbsp;-&nbsp;<?= formatHour($post->updated_at); ?></span>
                                 <?php endif;
                             endif; ?>
                         </div>

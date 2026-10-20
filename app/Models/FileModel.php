@@ -214,35 +214,113 @@ class FileModel extends BaseModel
     //upload file
     public function uploadFile()
     {
+        $data = null;
+        try {
+            if ($this->generalSettings->storage == 'aws_s3') {
+                $awsModel = new AwsModel();
+                $directory = $this->uploadModel->createUploadDirectory('files');
+                $path = 'uploads/files/' . $directory;
+                $file = $awsModel->uploadFileDirect('file', $path);
+                if (!empty($file['orjName'])) {
+                    $data = [
+                        'file_name' => $file['orjName'],
+                        'file_path' => $file['path'],
+                        'user_id' => user()->id,
+                        'storage' => 'aws_s3'
+                    ];
+                }
+            } else {
+                $file = $this->uploadModel->uploadFile('file');
+                if (!empty($file)) {
+                    $data = [
+                        'file_name' => $file['orjName'],
+                        'file_path' => $file['path'],
+                        'user_id' => user()->id,
+                        'storage' => 'local'
+                    ];
+                }
+            }
+            if (!empty($data)) {
+                $this->builderFiles->insert($data);
+                return true;
+            }
+        } catch (\Throwable $e) {
+            log_message('error', 'FileModel::uploadFile: ' . $e->getMessage());
+            throw $e;
+        }
+        return false;
+    }
+
+    //finalize a completed chunked upload into files/videos table
+    public function receiveUploadChunk($inputName, $uploadId, $chunkIndex)
+    {
+        return $this->uploadModel->saveUploadChunk($inputName, $uploadId, $chunkIndex);
+    }
+
+    public function clearChunkedUpload($uploadId)
+    {
+        $this->uploadModel->deleteChunkedUpload($uploadId);
+    }
+
+    public function saveChunkedUpload($uploadType, $uploadId, $originalName, $totalChunks = 0)
+    {
+        $uploadType = cleanStr($uploadType);
+        if (!in_array($uploadType, ['file', 'video'], true)) {
+            return false;
+        }
+
+        if ($uploadType === 'video') {
+            $file = $this->uploadModel->finalizeChunkedUpload($uploadId, $originalName, 'videos', 'video_', false, $totalChunks);
+            if (empty($file)) {
+                return false;
+            }
+            $storage = 'local';
+            if ($this->generalSettings->storage == 'aws_s3') {
+                $awsModel = new AwsModel();
+                $awsModel->uploadFile($file['path']);
+                $storage = 'aws_s3';
+            }
+            $this->builderVideos->insert([
+                'video_name' => $file['orjName'],
+                'video_path' => $file['path'],
+                'user_id' => user()->id,
+                'storage' => $storage
+            ]);
+            return true;
+        }
+
+        $extArray = [];
+        if (!empty($this->generalSettings->allowed_file_extensions)) {
+            $extArray = @explode(',', $this->generalSettings->allowed_file_extensions);
+            $extArray = array_map(static function ($item) {
+                $item = trim($item);
+                $item = trim($item, '"\'');
+                return strtolower($item);
+            }, $extArray);
+        }
+        $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        if (!empty($extArray) && !in_array($ext, $extArray, true)) {
+            $this->uploadModel->deleteChunkedUpload($uploadId);
+            return false;
+        }
+
+        $file = $this->uploadModel->finalizeChunkedUpload($uploadId, $originalName, 'files', 'file_', true, $totalChunks);
+        if (empty($file)) {
+            return false;
+        }
+        $storage = 'local';
         if ($this->generalSettings->storage == 'aws_s3') {
             $awsModel = new AwsModel();
-            $directory = $this->uploadModel->createUploadDirectory('files');
-            $path = 'uploads/files/' . $directory;
-            $file = $awsModel->uploadFileDirect('file', $path);
-            if (!empty($file['orjName'])) {
-                $data = [
-                    'file_name' => $file['orjName'],
-                    'file_path' => $file['path'],
-                    'user_id' => user()->id,
-                    'storage' => 'aws_s3'
-                ];
-            }
-        } else {
-            $file = $this->uploadModel->uploadFile('file');
-            if (!empty($file)) {
-                $data = [
-                    'file_name' => $file['orjName'],
-                    'file_path' => $file['path'],
-                    'user_id' => user()->id,
-                    'storage' => 'local'
-                ];
-            }
+            $awsModel->uploadFile($file['path']);
+            $storage = 'aws_s3';
         }
-        if (!empty($data)) {
-            $db = \Config\Database::connect(null, false);
-            $db->table('files')->insert($data);
-            $db->close();
-        }
+        $this->builderFiles->insert([
+            'file_name' => $file['orjName'],
+            'file_path' => $file['path'],
+            'user_id' => user()->id,
+            'storage' => $storage
+        ]);
+        return true;
     }
 
     //get files

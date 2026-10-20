@@ -3,6 +3,7 @@
 use CodeIgniter\Model;
 use Config\Globals;
 
+#[\AllowDynamicProperties]
 class BaseModel extends Model
 {
     public function __construct()

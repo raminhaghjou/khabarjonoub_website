@@ -2,8 +2,13 @@
 
 use CodeIgniter\Model;
 
+#[AllowDynamicProperties]  
 class CommonModel extends BaseModel
 {
+    protected $builderContact;
+    protected $builderComments;
+    protected $builderAds;
+
     public function __construct()
     {
         parent::__construct();

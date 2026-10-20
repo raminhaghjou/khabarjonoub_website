@@ -85,8 +85,19 @@ class ReactionModel extends BaseModel
                 're_sad' => 0,
                 're_wow' => 0
             ];
-            $this->builder->insert($data);
-            $row = $this->builder->where('post_id', cleanNumber($postId))->get()->getRow();
+            // A missing AUTO_INCREMENT on reactions.id makes this insert throw a
+            // duplicate-key error for every visitor. Never break the article page.
+            try {
+                $this->builder->insert($data);
+                $row = $this->builder->where('post_id', cleanNumber($postId))->get()->getRow();
+            } catch (\Throwable $e) {
+                log_message('error', 'Reaction insert failed for post ' . cleanNumber($postId) . ': ' . $e->getMessage());
+                $row = null;
+            }
+            if (empty($row)) {
+                $data['id'] = 0;
+                $row = (object) $data;
+            }
         }
         return $row;
     }

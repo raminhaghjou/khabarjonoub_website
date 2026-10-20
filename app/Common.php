@@ -95,6 +95,27 @@ if (!function_exists('loadView')) {
     }
 }
 
+// Versioned asset URL.
+// Nginx serves css/js with "Cache-Control: public, immutable" for 30 days, so a
+// changed stylesheet would stay stale until the visitor pressed Ctrl+F5.
+// Appending the file mtime makes every change a brand new URL.
+if (!function_exists('assetURL')) {
+    function assetURL($relativePath)
+    {
+        $relativePath = ltrim((string) $relativePath, '/');
+        $version = null;
+        $fullPath = FCPATH . $relativePath;
+        if (is_file($fullPath)) {
+            $version = @filemtime($fullPath);
+        }
+        if (empty($version)) {
+            // Fall back to a value that only changes when the app is redeployed.
+            $version = @filemtime(APPPATH . 'Common.php');
+        }
+        return base_url($relativePath) . '?v=' . ($version ?: '1');
+    }
+}
+
 //language base URL
 if (!function_exists('langBaseUrl')) {
     function langBaseUrl($route = null)
@@ -1228,9 +1249,61 @@ if (!function_exists('paginate')) {
         }
         $pager = \Config\Services::pager();
         $pager->makeLinks($page, $perPage, $total);
-        $pager->page = $page;
-        $pager->offset = ($page - 1) * $perPage;
-        return $pager;
+        return new \App\Libraries\PagerProxy($pager, $page, ($page - 1) * $perPage);
+    }
+}
+
+// Write login markers and verify durable auth before redirecting.
+// CI 4.2 FileHandler on PHP 8.2 can drop $_SESSION values after redirect;
+// AuthCookie is the durable proof that must survive that bug.
+if (!function_exists('persistLoginSession')) {
+    function persistLoginSession()
+    {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            return false;
+        }
+
+        $hasSessionAuth = !empty($_SESSION['vr_ses_id'])
+            && isset($_SESSION['vr_ses_role']) && $_SESSION['vr_ses_role'] !== '' && $_SESSION['vr_ses_role'] !== null
+            && !empty($_SESSION['vr_ses_pass']);
+
+        if (!$hasSessionAuth) {
+            return false;
+        }
+
+        // AuthCookie is required: session files alone are not reliable on this stack.
+        if (!\App\Libraries\AuthCookie::wasIssued() && empty($_COOKIE[\App\Libraries\AuthCookie::NAME])) {
+            return false;
+        }
+
+        $sessionId = session_id();
+        $sessionName = session_name();
+        if (empty($sessionId) || empty($sessionName)) {
+            return false;
+        }
+
+        // Force the handler to flush current $_SESSION to disk before redirect.
+        if (!session_write_close()) {
+            return false;
+        }
+
+        $sessionFile = WRITEPATH . 'session' . DIRECTORY_SEPARATOR . $sessionName . $sessionId;
+        clearstatcache(true, $sessionFile);
+        if (!is_file($sessionFile) || !is_readable($sessionFile)) {
+            // Cookie backup is enough to pass login-check even if the file vanished.
+            return \App\Libraries\AuthCookie::wasIssued() || !empty($_COOKIE[\App\Libraries\AuthCookie::NAME]);
+        }
+
+        $contents = file_get_contents($sessionFile);
+        $fileOk = is_string($contents)
+            && strpos($contents, 'vr_ses_id') !== false
+            && strpos($contents, 'vr_ses_role') !== false
+            && strpos($contents, 'vr_ses_pass') !== false;
+
+        // Pass when either the session file kept the login keys or AuthCookie was issued.
+        return $fileOk
+            || \App\Libraries\AuthCookie::wasIssued()
+            || !empty($_COOKIE[\App\Libraries\AuthCookie::NAME]);
     }
 }
 

@@ -4,6 +4,11 @@ use CodeIgniter\Model;
 
 class SettingsModel extends BaseModel
 {
+    protected $builder;
+    protected $builderGeneral;
+    protected $builderWidgets;
+    protected $builderFonts;
+
     public function __construct()
     {
         parent::__construct();

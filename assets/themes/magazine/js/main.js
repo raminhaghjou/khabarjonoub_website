@@ -227,10 +227,10 @@ $(document).ready(function () {
             type: 'POST',
             data: serializedData,
             success: function (response) {
-                var obj = JSON.parse(response);
-                if (obj.result == 1) {
-                    location.reload();
-                } else if (obj.result == 0) {
+                var obj = JSON.parse(response);
+                if (obj.result == 1) {
+                    window.location.href = obj.redirect_url || window.location.href;
+                } else if (obj.result == 0) {
                     document.getElementById("result-login").innerHTML = obj.error_message;
                 }
             }

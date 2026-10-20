@@ -190,12 +190,93 @@ class FileController extends BaseAdminController
     *------------------------------------------------------------------------------------------
     */
 
+    private function prepareUploadRequest()
+    {
+        @ignore_user_abort(true);
+        @set_time_limit(600);
+        @ini_set('max_execution_time', '600');
+        @ini_set('max_input_time', '600');
+        @ini_set('memory_limit', '512M');
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+    }
+
     /**
      * Upload File
      */
     public function uploadFile()
     {
-        $this->fileModel->uploadFile();
+        $this->prepareUploadRequest();
+
+        try {
+            $ok = $this->fileModel->uploadFile();
+            if (!$ok) {
+                return $this->response->setStatusCode(400)->setJSON([
+                    'status' => 0,
+                    'message' => 'File upload failed'
+                ]);
+            }
+            return $this->response->setJSON(['status' => 1]);
+        } catch (\Throwable $e) {
+            log_message('error', 'FileController::uploadFile: ' . $e->getMessage());
+            return $this->response->setStatusCode(500)->setJSON([
+                'status' => 0,
+                'message' => 'File upload error'
+            ]);
+        }
+    }
+
+    /**
+     * Upload file/video in small chunks (avoids mid-transfer stalls on LiteSpeed/VPN)
+     */
+    public function uploadChunk()
+    {
+        $this->prepareUploadRequest();
+
+        $uploadType = inputPost('upload_type');
+        $uploadId = inputPost('upload_id');
+        $chunkIndex = (int) inputPost('chunk_index');
+        $totalChunks = (int) inputPost('total_chunks');
+        $fileName = inputPost('file_name');
+
+        if (!in_array($uploadType, ['file', 'video'], true) || empty($uploadId) || $totalChunks < 1 || $chunkIndex < 0 || $chunkIndex >= $totalChunks) {
+            return $this->response->setStatusCode(400)->setJSON(['status' => 0, 'message' => 'Invalid chunk request']);
+        }
+
+        if ($uploadType === 'video') {
+            $ext = strtolower(pathinfo((string) $fileName, PATHINFO_EXTENSION));
+            if (!in_array($ext, ['mp4', 'webm'], true)) {
+                return $this->response->setStatusCode(400)->setJSON(['status' => 0, 'message' => 'Invalid video type']);
+            }
+        }
+
+        try {
+            $saved = $this->fileModel->receiveUploadChunk('file', $uploadId, $chunkIndex);
+            if (!$saved) {
+                return $this->response->setStatusCode(400)->setJSON(['status' => 0, 'message' => 'Chunk save failed']);
+            }
+
+            if ($chunkIndex < $totalChunks - 1) {
+                return $this->response->setJSON([
+                    'status' => 1,
+                    'done' => 0,
+                    'chunk_index' => $chunkIndex
+                ]);
+            }
+
+            $ok = $this->fileModel->saveChunkedUpload($uploadType, $uploadId, $fileName, $totalChunks);
+            if (!$ok) {
+                $this->fileModel->clearChunkedUpload($uploadId);
+                return $this->response->setStatusCode(400)->setJSON(['status' => 0, 'message' => 'Finalize failed']);
+            }
+
+            return $this->response->setJSON(['status' => 1, 'done' => 1]);
+        } catch (\Throwable $e) {
+            log_message('error', 'FileController::uploadChunk: ' . $e->getMessage());
+            $this->fileModel->clearChunkedUpload($uploadId);
+            return $this->response->setStatusCode(500)->setJSON(['status' => 0, 'message' => 'Chunk upload error']);
+        }
     }
 
     /**
@@ -272,7 +353,24 @@ class FileController extends BaseAdminController
      */
     public function uploadVideo()
     {
-        $this->fileModel->uploadVideo();
+        $this->prepareUploadRequest();
+
+        try {
+            $ok = $this->fileModel->uploadVideo();
+            if (!$ok) {
+                return $this->response->setStatusCode(400)->setJSON([
+                    'status' => 0,
+                    'message' => 'Video upload failed'
+                ]);
+            }
+            return $this->response->setJSON(['status' => 1]);
+        } catch (\Throwable $e) {
+            log_message('error', 'FileController::uploadVideo: ' . $e->getMessage());
+            return $this->response->setStatusCode(500)->setJSON([
+                'status' => 0,
+                'message' => 'Video upload error'
+            ]);
+        }
     }
 
     /**

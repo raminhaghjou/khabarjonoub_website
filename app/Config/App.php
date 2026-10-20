@@ -24,7 +24,7 @@ class App extends BaseConfig
      *
      * @var string
      */
-    public $baseURL = 'http://localhost:8080/';
+    public $baseURL = 'https://khabarjonoub.com/';
 
     /**
      * --------------------------------------------------------------------------
@@ -152,7 +152,7 @@ class App extends BaseConfig
      *
      * @var string
      */
-    public $sessionDriver = 'CodeIgniter\Session\Handlers\DatabaseHandler';
+    public $sessionDriver = 'CodeIgniter\Session\Handlers\FileHandler';
 
     /**
      * --------------------------------------------------------------------------
@@ -163,7 +163,8 @@ class App extends BaseConfig
      *
      * @var string
      */
-    public $sessionCookieName = 'ci_session';
+    // Must match live PHP session file prefix (writable/session/khabarjonoub_session*).
+    public $sessionCookieName = 'khabarjonoub_session';
 
     /**
      * --------------------------------------------------------------------------
@@ -194,7 +195,7 @@ class App extends BaseConfig
      *
      * @var string
      */
-    public $sessionSavePath = 'ci_sessions';
+    public $sessionSavePath = WRITEPATH . 'session';
 
     /**
      * --------------------------------------------------------------------------
@@ -219,7 +220,9 @@ class App extends BaseConfig
      *
      * @var int
      */
-    public $sessionTimeToUpdate = 300;
+    // CI 4.2.10 FileHandler loses session data when rotating IDs on PHP 8.2.
+    // Keep the cryptographically-random ID stable until the framework is upgraded.
+    public $sessionTimeToUpdate = 0;
 
     /**
      * --------------------------------------------------------------------------
@@ -284,7 +287,7 @@ class App extends BaseConfig
      *
      * @deprecated use Config\Cookie::$secure property instead.
      */
-    public $cookieSecure = false;
+    public $cookieSecure = true;
 
     /**
      * --------------------------------------------------------------------------
@@ -408,7 +411,7 @@ class App extends BaseConfig
      *
      * @var bool
      */
-    public $CSRFRegenerate = true;
+    public $CSRFRegenerate = false;
 
     /**
      * --------------------------------------------------------------------------
@@ -421,7 +424,7 @@ class App extends BaseConfig
      *
      * @var bool
      */
-    public $CSRFRedirect = true;
+    public $CSRFRedirect = false;
 
     /**
      * --------------------------------------------------------------------------
@@ -473,6 +476,22 @@ class App extends BaseConfig
     public function __construct()
     {
         parent::__construct();
+
+        // Keep generated URLs on the same origin for both official domains.
+        // The allowlist prevents an untrusted Host header from affecting URLs.
+        if (!empty($_SERVER['HTTP_HOST'])) {
+            $requestHost = strtolower(preg_replace('/:\d+$/', '', trim($_SERVER['HTTP_HOST'])));
+            $allowedHosts = [
+                'khabarjonoub.com',
+                'www.khabarjonoub.com',
+                'khabarjonoub.ir',
+                'www.khabarjonoub.ir',
+            ];
+            if (in_array($requestHost, $allowedHosts, true)) {
+                $this->baseURL = 'https://' . $requestHost . '/';
+            }
+        }
+
         $cookiePrefix = !empty(getenv('cookie.prefix')) ? getenv('cookie.prefix') : '';
         $this->CSRFTokenName = $cookiePrefix . $this->CSRFTokenName;
         $this->CSRFCookieName = $cookiePrefix . $this->CSRFCookieName;

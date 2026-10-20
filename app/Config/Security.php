@@ -83,7 +83,7 @@ class Security extends BaseConfig
      *
      * @var bool
      */
-    public $regenerate = true;
+    public $regenerate = false;
 
     /**
      * --------------------------------------------------------------------------
@@ -94,7 +94,7 @@ class Security extends BaseConfig
      *
      * @var bool
      */
-    public $redirect = true;
+    public $redirect = false;
 
     /**
      * --------------------------------------------------------------------------

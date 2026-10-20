@@ -83,7 +83,7 @@
     <script src="<?= base_url($assetsPath . '/js/jquery-3.6.1.min.js'); ?> "></script>
     <script src="<?= base_url('assets/vendor/bootstrap/js/bootstrap.bundle.min.js'); ?> "></script>
     <script src="<?= base_url($assetsPath . '/js/plugins.js'); ?> "></script>
-    <script src="<?= base_url($assetsPath . '/js/main.min.js'); ?> "></script>
+    <script src="<?= base_url($assetsPath . '/js/main.js'); ?>?v=20260815"></script>
 <?= loadView('partials/_js_footer'); ?>
     <script>$("form[method='post']").append("<input type='hidden' name='sys_lang_id' value='<?= $activeLang->id; ?>'>");</script>
 <?php if ($generalSettings->pwa_status == 1): ?>

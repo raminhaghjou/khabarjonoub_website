@@ -978,7 +978,7 @@ class AdminController extends BaseAdminController
             if ($this->authModel->addUser($id)) {
                 $this->session->setFlashdata('success', trans("msg_updated"));
             } else {
-                $this->session->setFlashdata('error', trans("msg_error"));
+                $this->session->setFlashdata('error', trans("msg_error") . ' (اگر ستون id جدول users مقدار AUTO_INCREMENT ندارد، ابتدا آن را اصلاح کنید.)');
                 return redirect()->to(adminUrl('add-user'))->withInput();
             }
         }

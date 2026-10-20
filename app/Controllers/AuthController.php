@@ -33,7 +33,20 @@ class AuthController extends BaseController
             $model = new AuthModel();
             $result = $model->login();
             if ($result == "success") {
-                echo json_encode(['result' => 1]);
+                $user = $model->getUserByEmail(inputPost('email'));
+                $role = !empty($user) ? $model->getRoleByKey($user->role) : null;
+                $hasAdminPanelAccess = !empty($user) && ($user->role == 'admin' || (!empty($role) && $role->admin_panel == 1));
+                $redirectURL = $hasAdminPanelAccess ? adminUrl('login-check') : langBaseUrl();
+
+                // Persist authentication before the browser follows the URL.
+                if (!persistLoginSession()) {
+                    echo json_encode(['result' => 0, 'error_message' => '<div class="alert alert-danger">فایل Session ساخته شد، اما اطلاعات ورود داخل آن نوشته نشد.</div>']);
+                    return;
+                }
+                // Ensure auth cookie is on the outgoing response for the next request.
+                \App\Libraries\AuthCookie::applyToResponse(\Config\Services::response());
+                echo json_encode(['result' => 1, 'redirect_url' => $redirectURL]);
+                return;
             } elseif ($result == "banned") {
                 $this->session->setFlashdata('error', trans("message_ban_error"));
                 $data = [

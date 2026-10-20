@@ -95,78 +95,40 @@
     </li>
 </script>
 
-<?php $fileExtensions = '';
-$extArray = array();
+<?php
+$fileExtensions = [];
+$extArray = [];
 if (!empty($generalSettings->allowed_file_extensions)) {
-    $extArray = @explode(',', $generalSettings->allowed_file_extensions);
+    $extArray = explode(',', $generalSettings->allowed_file_extensions);
 }
-$newArray = array();
-if (!empty($extArray)) {
-    foreach ($extArray as $item) {
-        $item = strReplace('"', '', $item);
-        $item = strReplace("'", '', $item);
-        array_push($newArray, $item);
+foreach ($extArray as $item) {
+    $item = trim(str_replace(['"', "'"], '', $item));
+    if ($item !== '') {
+        $fileExtensions[] = strtolower($item);
     }
-    $fileExtensions = json_encode($newArray);
-} ?>
+}
+$fileExtensionsJson = json_encode($fileExtensions);
+?>
 
 <script>
+(function ($) {
     $(function () {
-        $('#drag-and-drop-zone').dmUploader({
-            url: '<?= base_url("FileController/uploadFile"); ?>',
-            queue: true,
-            extFilter: <?= $fileExtensions; ?>,
-            extraData: function (id) {
-                return {
-                    "file_id": id,
-                    '<?= csrf_token() ?>': getCsrfHash()
-                };
-            },
-            onDragEnter: function () {
-                this.addClass('active');
-            },
-            onDragLeave: function () {
-                this.removeClass('active');
-            },
-            onNewFile: function (id, file) {
-                ui_multi_add_file(id, file, "file");
-            },
-            onBeforeUpload: function (id) {
-                $('#uploaderFile' + id + ' .dm-progress-waiting').hide();
-                ui_multi_update_file_progress(id, 0, '', true);
-                ui_multi_update_file_status(id, 'uploading', 'Uploading...');
-                $("#btn_reset_upload").show();
-            },
-            onUploadProgress: function (id, percent) {
-                ui_multi_update_file_progress(id, percent);
-            },
-            onUploadSuccess: function (id, data) {
-                refresh_files();
-                document.getElementById("uploaderFile" + id).remove();
-                ui_multi_update_file_status(id, 'success', 'Upload Complete');
-                ui_multi_update_file_progress(id, 100, 'success', false);
-                $("#btn_reset_upload").hide();
-            },
-            onFileTypeError: function (file) {
-                swal({
-                    text: "<?= trans("invalid_file_type");?>",
-                    icon: "warning",
-                    button: VrConfig.textOk
-                });
-            },
-            onFileExtError: function (file) {
-                swal({
-                    text: "<?= trans("invalid_file_type");?>",
-                    icon: "warning",
-                    button: VrConfig.textOk
-                });
-            }
+        if (typeof VrChunkUploader !== 'function') {
+            console.error('VrChunkUploader missing');
+            return;
+        }
+        var uploader = VrChunkUploader({
+            uploadUrl: '<?= base_url("FileController/uploadChunk") ?>',
+            uploadType: 'file',
+            csrfName: '<?= csrf_token() ?>',
+            csrfHash: '<?= csrf_hash() ?>',
+            invalidTypeText: '<?= clrQuotes(trans("invalid_file_type")) ?>',
+            acceptExt: <?= $fileExtensionsJson ?>,
+            listSelector: '#files-file',
+            resetBtnSelector: '#btn_reset_upload',
+            onComplete: function () { refresh_files(); }
         });
+        uploader.bindZone('#drag-and-drop-zone', '#drag-and-drop-zone input[type=file]');
     });
-
-    $(document).on('click', '#btn_reset_upload', function () {
-        $("#drag-and-drop-zone").dmUploader("reset");
-        $("#files-file").empty();
-        $(this).hide();
-    });
+}(jQuery));
 </script>

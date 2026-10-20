@@ -32,10 +32,10 @@ class Database extends Config
 	 */
 	public $default = [
 		'DSN'      => '',
-		'hostname' => env('DB_HOSTNAME', 'localhost'),   // ← استفاده از env
-        'username' => env('DB_USERNAME', 'khabarnews_news'),
-        'password' => env('DB_PASSWORD', 'ram123RAM!!'),
-        'database' => env('DB_DATABASE', 'khabarnews_news'),
+		'hostname' => 'localhost',
+		'username' => 'khabarjo_khabarjonoub',
+		'password' => 'ram123RAM!!',
+		'database' => 'khabarjo_khabarjonoub',
 		'DBDriver' => 'MySQLi',
 		'DBPrefix' => '',
 		'pConnect' => false,

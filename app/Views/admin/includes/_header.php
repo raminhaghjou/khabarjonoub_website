@@ -24,6 +24,7 @@
     <link rel="stylesheet" href="<?= base_url('assets/admin/plugins/file-uploader/css/styles-1.0.css'); ?>"/>
     <link rel="stylesheet" href="<?= base_url('assets/admin/css/custom-2.1.css'); ?>">
     <script src="<?= base_url('assets/admin/js/jquery.min.js'); ?>"></script>
+    <script src="<?= base_url('assets/admin/js/chunk-uploader.js'); ?>?v=20260922a"></script>
     <script src="<?= base_url('assets/admin/plugins/overlay-scrollbars/OverlayScrollbars.min.js'); ?>"></script>
     <script>$(function () {
             $('.sidebar-scrollbar').overlayScrollbars({});
@@ -35,22 +36,25 @@
         <script>directionality = "rtl";</script>
     <?php endif; ?>
     <script>
-        var VrConfig = {baseURL: '<?= base_url(); ?>', csrfTokenName: '<?= csrf_token() ?>', csrfCookieName: '<?= config('App')->CSRFCookieName; ?>', sysLangId: '<?= $activeLang->id; ?>', textSelectImage: "<?= trans("select_image"); ?>", textOk: "<?= trans("ok"); ?>", textCancel: "<?= trans("cancel"); ?>", textProcessing: "<?= trans("txt_processing"); ?>"};
+        var VrConfig = {baseURL: '<?= base_url(); ?>', csrfTokenName: '<?= csrf_token() ?>', csrfCookieName: '<?= service('security')->getCookieName(); ?>', sysLangId: '<?= $activeLang->id; ?>', textSelectImage: "<?= trans("select_image"); ?>", textOk: "<?= trans("ok"); ?>", textCancel: "<?= trans("cancel"); ?>", textProcessing: "<?= trans("txt_processing"); ?>"};
 
         function getCsrfHash() {
-            var name = VrConfig.csrfCookieName + "=";
-            var decodedCookie = decodeURIComponent(document.cookie);
+            var names = [VrConfig.csrfCookieName, 'vr' + VrConfig.csrfCookieName, 'app_csrf_cookie', 'vrapp_csrf_cookie'];
+            var decodedCookie = decodeURIComponent(document.cookie || '');
             var ca = decodedCookie.split(';');
-            for (var i = 0; i < ca.length; i++) {
-                var c = ca[i];
-                while (c.charAt(0) == ' ') {
-                    c = c.substring(1);
-                }
-                if (c.indexOf(name) == 0) {
-                    return c.substring(name.length, c.length);
+            for (var n = 0; n < names.length; n++) {
+                var name = names[n] + '=';
+                for (var i = 0; i < ca.length; i++) {
+                    var c = ca[i];
+                    while (c.charAt(0) == ' ') {
+                        c = c.substring(1);
+                    }
+                    if (c.indexOf(name) === 0 && c.length > name.length) {
+                        return c.substring(name.length, c.length);
+                    }
                 }
             }
-            return "";
+            return '';
         }
 
         function addCsrf(data) {

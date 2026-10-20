@@ -66,6 +66,9 @@ $routes->post('set-iban-payout-account-post', 'EarningsController::setIbanPayout
 $routes->post('set-swift-payout-account-post', 'EarningsController::setSwiftPayoutAccountPost');
 $routes->post('add-newsletter-post', 'AjaxController::addNewsletterPost');
 $routes->post('close-cookies-warning-post', 'AjaxController::closeCookiesWarningPost');
+$routes->post('FileController/uploadChunk', 'FileController::uploadChunk');
+$routes->post('FileController/uploadFile', 'FileController::uploadFile');
+$routes->post('FileController/uploadVideo', 'FileController::uploadVideo');
 
 /*
  * --------------------------------------------------------------------
@@ -75,6 +78,7 @@ $routes->post('close-cookies-warning-post', 'AjaxController::closeCookiesWarning
 
 $routes->get($customRoutes->admin, 'AdminController::index');
 $routes->get($customRoutes->admin . '/login', 'CommonController::adminLogin');
+$routes->get($customRoutes->admin . '/login-check', 'CommonController::adminLoginCheck');
 $routes->post($customRoutes->admin . '/login-post', 'CommonController::adminLoginPost');
 $routes->get($customRoutes->admin . '/themes', 'AdminController::themes');
 //pages
