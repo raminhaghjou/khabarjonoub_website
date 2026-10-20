@@ -254,7 +254,8 @@ class FileController extends BaseAdminController
         try {
             $saved = $this->fileModel->receiveUploadChunk('file', $uploadId, $chunkIndex);
             if (!$saved) {
-                return $this->response->setStatusCode(400)->setJSON(['status' => 0, 'message' => 'Chunk save failed']);
+                $message = $this->fileModel->uploadModel->lastChunkError ?: 'Chunk save failed';
+                return $this->response->setStatusCode(400)->setJSON(['status' => 0, 'message' => $message]);
             }
 
             if ($chunkIndex < $totalChunks - 1) {

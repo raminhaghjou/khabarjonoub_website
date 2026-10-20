@@ -261,107 +261,137 @@ class UploadModel extends BaseModel
         return @file_put_contents($dir . 'meta.json', json_encode($meta), LOCK_EX) !== false;
     }
 
+    public $lastChunkError = '';
+
+    private function chunkFailure(string $message): bool
+    {
+        $this->lastChunkError = $message;
+        log_message('error', 'Chunk upload: ' . $message);
+        return false;
+    }
+
+    private function phpUploadErrorText(int $error): string
+    {
+        if ($error === UPLOAD_ERR_INI_SIZE || $error === UPLOAD_ERR_FORM_SIZE) {
+            return 'حجم قطعه از محدودیت آپلود سرور بیشتر است';
+        }
+        if ($error === UPLOAD_ERR_PARTIAL) {
+            return 'قطعه ویدیو ناقص به سرور رسید';
+        }
+        if ($error === UPLOAD_ERR_NO_FILE) {
+            return 'فایل قطعه به سرور نرسید';
+        }
+        if ($error === UPLOAD_ERR_NO_TMP_DIR || $error === UPLOAD_ERR_CANT_WRITE) {
+            return 'پوشه موقت PHP روی سرور قابل نوشتن نیست';
+        }
+        return 'ذخیره قطعه ناموفق بود';
+    }
+
     //append each chunk into one data.bin so finalize is a fast rename/copy
     public function saveUploadChunk($inputName, $uploadId, $chunkIndex)
     {
+        $this->lastChunkError = '';
         $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) $uploadId);
         if ($uploadId === '' || strlen($uploadId) > 80) {
-            return false;
+            return $this->chunkFailure('شناسه آپلود نامعتبر است');
         }
         $chunkIndex = (int) $chunkIndex;
         if ($chunkIndex < 0) {
-            return false;
+            return $this->chunkFailure('شماره قطعه نامعتبر است');
+        }
+
+        $upload = $_FILES[$inputName] ?? null;
+        if (!is_array($upload)) {
+            return $this->chunkFailure('فایل قطعه به سرور نرسید');
+        }
+        $error = (int) ($upload['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($error !== UPLOAD_ERR_OK) {
+            return $this->chunkFailure($this->phpUploadErrorText($error));
+        }
+        $tmpName = (string) ($upload['tmp_name'] ?? '');
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            return $this->chunkFailure('فایل موقت آپلود معتبر نیست');
         }
 
         $dir = $this->chunkUploadDir($uploadId);
-        if (!is_dir($dir)) {
-            if (!@mkdir($dir, 0755, true) && !is_dir($dir)) {
-                log_message('error', 'Chunk dir create failed: ' . $dir);
-                return false;
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+            return $this->chunkFailure('پوشه موقت آپلود ساخته نشد');
+        }
+        if (!is_writable($dir)) {
+            return $this->chunkFailure('پوشه موقت آپلود قابل نوشتن نیست');
+        }
+
+        $lock = @fopen($dir . 'write.lock', 'c');
+        if ($lock === false || !@flock($lock, LOCK_EX)) {
+            if ($lock !== false) {
+                fclose($lock);
             }
+            return $this->chunkFailure('قفل نوشتن قطعه برقرار نشد');
         }
 
-        $file = $this->request->getFile($inputName);
-        if (empty($file) || !$file->isValid()) {
-            log_message('error', 'Invalid upload chunk for ' . $uploadId);
-            return false;
-        }
-
-        $meta = $this->readChunkMeta($dir);
-        $next = (int) ($meta['next'] ?? 0);
-
-        // Already accepted (client retry after success response was lost)
-        if ($chunkIndex < $next) {
-            return true;
-        }
-        if ($chunkIndex !== $next) {
-            log_message('error', 'Out-of-order chunk for ' . $uploadId . ': got ' . $chunkIndex . ', expected ' . $next);
-            return false;
-        }
-
-        // Stage to a part file first so retries overwrite safely
-        $partPath = $dir . $chunkIndex . '.part';
-        $tmpName = $file->getTempName();
         try {
-            if (!$file->hasMoved()) {
-                $file->move($dir, $chunkIndex . '.part', true);
-            } elseif (!is_file($partPath) && is_file($tmpName)) {
-                @copy($tmpName, $partPath);
+            $meta = $this->readChunkMeta($dir);
+            $next = (int) ($meta['next'] ?? 0);
+            if ($chunkIndex < $next) {
+                return true;
             }
-        } catch (\Throwable $e) {
-            if (is_file($tmpName) && !@copy($tmpName, $partPath)) {
-                log_message('error', 'Chunk stage failed: ' . $e->getMessage());
-                return false;
+            if ($chunkIndex !== $next) {
+                return $this->chunkFailure('ترتیب قطعه‌ها نادرست است');
             }
-        }
-        if (!is_file($partPath)) {
-            log_message('error', 'Missing staged chunk for ' . $uploadId);
-            return false;
-        }
 
-        $dataPath = $dir . 'data.bin';
-        $beforeSize = is_file($dataPath) ? (int) filesize($dataPath) : 0;
-        $in = @fopen($partPath, 'rb');
-        $out = @fopen($dataPath, 'ab');
-        if ($in === false || $out === false) {
-            if ($in !== false) {
-                fclose($in);
+            $partPath = $dir . $chunkIndex . '.part';
+            if (is_file($partPath)) {
+                @unlink($partPath);
             }
-            if ($out !== false) {
-                fclose($out);
+            if (!@move_uploaded_file($tmpName, $partPath) && !@copy($tmpName, $partPath)) {
+                return $this->chunkFailure('ذخیره قطعه روی دیسک انجام نشد');
             }
-            log_message('error', 'Cannot open chunk streams for ' . $uploadId);
-            return false;
-        }
+            if (!is_file($partPath)) {
+                return $this->chunkFailure('قطعه بعد از ذخیره پیدا نشد');
+            }
 
-        $copied = @stream_copy_to_stream($in, $out);
-        fclose($in);
-        fclose($out);
-        if ($copied === false) {
-            if (is_file($dataPath)) {
+            $dataPath = $dir . 'data.bin';
+            $beforeSize = is_file($dataPath) ? (int) filesize($dataPath) : 0;
+            $in = @fopen($partPath, 'rb');
+            $out = @fopen($dataPath, 'ab');
+            if ($in === false || $out === false) {
+                if ($in !== false) {
+                    fclose($in);
+                }
+                if ($out !== false) {
+                    fclose($out);
+                }
+                return $this->chunkFailure('باز کردن فایل ویدیو برای نوشتن ممکن نشد');
+            }
+
+            $copied = @stream_copy_to_stream($in, $out);
+            fclose($in);
+            fclose($out);
+            if ($copied === false) {
                 $fh = @fopen($dataPath, 'c+b');
                 if ($fh) {
                     @ftruncate($fh, $beforeSize);
                     fclose($fh);
                 }
+                return $this->chunkFailure('چسباندن قطعه به ویدیو ناموفق بود');
             }
-            log_message('error', 'Chunk append failed for ' . $uploadId);
-            return false;
-        }
 
-        $meta['next'] = $chunkIndex + 1;
-        if (!$this->writeChunkMeta($dir, $meta)) {
-            $fh = @fopen($dataPath, 'c+b');
-            if ($fh) {
-                @ftruncate($fh, $beforeSize);
-                fclose($fh);
+            $meta['next'] = $chunkIndex + 1;
+            if (!$this->writeChunkMeta($dir, $meta)) {
+                $fh = @fopen($dataPath, 'c+b');
+                if ($fh) {
+                    @ftruncate($fh, $beforeSize);
+                    fclose($fh);
+                }
+                return $this->chunkFailure('ثبت وضعیت قطعه ناموفق بود');
             }
-            log_message('error', 'Chunk meta write failed for ' . $uploadId);
-            return false;
-        }
 
-        @unlink($partPath);
-        return true;
+            @unlink($partPath);
+            return true;
+        } finally {
+            @flock($lock, LOCK_UN);
+            @fclose($lock);
+        }
     }
 
     //move assembled data.bin (or legacy .part files) into the final uploads folder

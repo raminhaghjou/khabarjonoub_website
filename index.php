@@ -1,5 +1,12 @@
 <?php
 
+$host = strtolower(preg_replace('/:\d+$/', '', (string) ($_SERVER['HTTP_HOST'] ?? '')));
+if ($host === 'www.khabarjonoub.com' || $host === 'www.khabarjonoub.ir') {
+    $target = 'https://' . substr($host, 4) . ($_SERVER['REQUEST_URI'] ?? '/');
+    header('Location: ' . $target, true, 301);
+    exit;
+}
+
 // Check PHP version.
 $minPhpVersion = '7.4'; // If you update this, don't forget to update `spark`.
 if (version_compare(PHP_VERSION, $minPhpVersion, '<')) {

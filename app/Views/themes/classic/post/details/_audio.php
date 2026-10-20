@@ -57,7 +57,7 @@
                                             <div class="song amplitude-song-container amplitude-play-pause" amplitude-song-index="<?= $index; ?>">
                                                 <div class="song-now-playing-icon-container">
                                                     <div class="play-button-container"></div>
-                                                    <img class="now-playing" src="<?= base_url('assets/vendor/audio-player/img/now-playing.svg'); ?>"/>
+                                                    <img class="now-playing" src="<?= base_url('assets/vendor/audio-player/img/now-playing.svg'); ?>" alt="در حال پخش"/>
                                                 </div>
                                                 <div class="song-meta-data">
                                                     <span class="song-title"><?= esc($audio->audio_name); ?></span>

@@ -1,19 +1,42 @@
 <!DOCTYPE html>
 <html lang="<?= $activeLang->short_form ?>">
 <head>
+<?php
+$seoBrand = trim((string) ($baseSettings->application_name ?? ''));
+$seoSiteTitle = trim((string) ($baseSettings->site_title ?? ''));
+$seoTitle = trim((string) ($title ?? ''));
+if ($seoSiteTitle !== '' && mb_stripos($seoTitle, $seoSiteTitle) === false) {
+    $seoTitle .= ' - ' . $seoSiteTitle;
+}
+if (mb_strlen($seoTitle) > 65) {
+    $seoTitle = rtrim(mb_substr($seoTitle, 0, 62)) . '...';
+}
+$seoDescription = trim(preg_replace('/\s+/u', ' ', strip_tags((string) ($description ?? ''))));
+$seoKeywords = trim((string) ($keywords ?? ''));
+$keywordSeed = $seoBrand !== '' ? $seoBrand : $seoSiteTitle;
+if ($keywordSeed !== '' && mb_stripos($seoDescription, $keywordSeed) === false) {
+    $seoDescription = $keywordSeed . '، ' . $seoDescription;
+}
+if ($keywordSeed !== '' && ($seoKeywords === '' || mb_stripos($seoKeywords, $keywordSeed) === false)) {
+    $seoKeywords = $seoKeywords === '' ? $keywordSeed : ($keywordSeed . ', ' . $seoKeywords);
+}
+if (mb_strlen($seoDescription) > 160) {
+    $seoDescription = rtrim(mb_substr($seoDescription, 0, 157)) . '...';
+}
+?>
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title><?= escSls($title); ?> - <?= escSls($baseSettings->site_title); ?></title>
-<meta name="description" content="<?= escSls($description); ?>"/>
-<meta name="keywords" content="<?= escSls($keywords); ?>"/>
+<title><?= escSls($seoTitle); ?></title>
+<meta name="description" content="<?= escSls($seoDescription); ?>"/>
+<meta name="keywords" content="<?= escSls($seoKeywords); ?>"/>
 <meta name="author" content="<?= escSls($baseSettings->application_name); ?>"/>
 <meta property="og:locale" content="en_US"/>
 <meta property="og:site_name" content="<?= escSls($baseSettings->application_name); ?>"/>
 <?php if (isset($postType)): ?>
 <meta property="og:type" content="<?= $ogType; ?>"/>
 <meta property="og:title" content="<?= $ogTitle; ?>"/>
-<meta property="og:description" content="<?= escSls($description); ?>"/>
+<meta property="og:description" content="<?= escSls($seoDescription); ?>"/>
 <meta property="og:url" content="<?= currentFullURL(); ?>"/>
 <meta property="og:image" content="<?= $ogImage; ?>"/>
 <meta property="og:image:width" content="<?= $ogWidth; ?>"/>
@@ -29,21 +52,21 @@
 <meta name="twitter:site" content="@<?= escSls($baseSettings->application_name); ?>"/>
 <meta name="twitter:creator" content="@<?= escSls($ogCreator); ?>"/>
 <meta name="twitter:title" content="<?= escSls($post->title); ?>"/>
-<meta name="twitter:description" content="<?= escSls($description); ?>"/>
+<meta name="twitter:description" content="<?= escSls($seoDescription); ?>"/>
 <meta name="twitter:image" content="<?= $ogImage; ?>"/>
 <?php else: ?>
 <meta property="og:image" content="<?= getLogo(); ?>"/>
 <meta property="og:image:width" content="240"/>
 <meta property="og:image:height" content="90"/>
 <meta property="og:type" content="website"/>
-<meta property="og:title" content="<?= escSls($title); ?> - <?= escSls($baseSettings->site_title); ?>"/>
-<meta property="og:description" content="<?= escSls($description); ?>"/>
+<meta property="og:title" content="<?= escSls($seoTitle); ?>"/>
+<meta property="og:description" content="<?= escSls($seoDescription); ?>"/>
 <meta property="og:url" content="<?= currentFullURL(); ?>"/>
 <meta property="fb:app_id" content="<?= $generalSettings->facebook_app_id; ?>"/>
 <meta name="twitter:card" content="summary_large_image"/>
 <meta name="twitter:site" content="@<?= escSls($baseSettings->application_name); ?>"/>
-<meta name="twitter:title" content="<?= escSls($title); ?> - <?= escSls($baseSettings->site_title); ?>"/>
-<meta name="twitter:description" content="<?= escSls($description); ?>"/>
+<meta name="twitter:title" content="<?= escSls($seoTitle); ?>"/>
+<meta name="twitter:description" content="<?= escSls($seoDescription); ?>"/>
 <?php endif;
 if ($generalSettings->pwa_status == 1): ?>
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -90,7 +113,9 @@ if ($generalSettings->pwa_status == 1): ?>
 </script>
 <?= $generalSettings->custom_header_codes; ?>
 </head>
-<body>
+<body itemscope itemtype="https://schema.org/WebPage">
+<meta itemprop="name" content="<?= escSls($seoTitle); ?>">
+<meta itemprop="description" content="<?= escSls($seoDescription); ?>">
 <header id="header">
 <?= loadView('nav/_nav_top'); ?>
 <div class="logo-banner">

@@ -11,6 +11,10 @@ Options All -Indexes
 	Options +FollowSymlinks
 	RewriteEngine On
 
+	# Keep one canonical host: www -> apex
+	RewriteCond %{HTTP_HOST} ^www\.(khabarjonoub\.(com|ir))$ [NC]
+	RewriteRule ^ https://%1%{REQUEST_URI} [L,R=301]
+
 	# If you installed CodeIgniter in a subfolder, you will need to
 	# change the following line to match the subfolder you need.
 	# http://httpd.apache.org/docs/current/mod/mod_rewrite.html#rewritebase
@@ -71,7 +75,8 @@ Options All -Indexes
 </IfModule>
 
 <IfModule mod_headers.c>
-        <FilesMatch "\.(ttf|ttc|otf|eot|woff|woff2|svg|svgz|jpg|png|ico|font.css|css|js)$">
+        <FilesMatch "\.(ttf|ttc|otf|eot|woff|woff2|svg|svgz|jpg|jpeg|png|webp|ico|css|js)$">
+            Header set Cache-Control "public, max-age=31536000"
             ## un-remark this one for all access and remark out the one below it
             #Header set Access-Control-Allow-Origin "*"
             ## Change this to your local host url. and https or http

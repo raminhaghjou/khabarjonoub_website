@@ -12,7 +12,7 @@
     }
 
     var DEFAULTS = {
-        chunkSize: 2 * 1024 * 1024, // 2 MB
+        chunkSize: 512 * 1024, // stays under common 1MB/2MB PHP upload limits
         retries: 5,
         timeout: 90000,             // 90s per chunk
         uploadUrl: null,
@@ -134,9 +134,16 @@
                     onDone(item.elId);
                 }
             }).fail(function (xhr, status) {
-                var reason = status || 'error';
-                if (xhr && xhr.status) {
+                var body = parseResponse(xhr && xhr.responseText);
+                var reason = (body && body.message) ? body.message : (status || 'error');
+                if ((!body || !body.message) && xhr && xhr.status) {
                     reason += ' (' + xhr.status + ')';
+                }
+                var retryable = !xhr || !xhr.status || xhr.status >= 500 || status === 'timeout';
+                if (!retryable) {
+                    console.error('chunk upload failed', reason);
+                    onError(item.elId, reason);
+                    return;
                 }
                 onChunkFail(item, idx, attempt, reason);
             }).always(function () {
@@ -158,7 +165,7 @@
                 return;
             }
             console.error('chunk upload failed', reason);
-            onError(item.elId);
+            onError(item.elId, reason);
         }
 
         function onDone(elId) {
@@ -174,7 +181,7 @@
             processQueue();
         }
 
-        function onError(elId) {
+        function onError(elId, reason) {
             ui_multi_update_file_progress(elId, 100, 'danger', false);
             ui_multi_update_file_status(elId, 'danger', 'Error');
             if (typeof opts.onError === 'function') {
@@ -185,7 +192,7 @@
             processQueue();
             if (window.swal) {
                 swal({
-                    text: 'آپلود ناموفق بود. اتصال را بررسی کنید و دوباره امتحان کنید.',
+                    text: reason || 'آپلود ناموفق بود. اتصال را بررسی کنید و دوباره امتحان کنید.',
                     icon: 'error',
                     button: (window.VrConfig && VrConfig.textOk) ? VrConfig.textOk : 'OK'
                 });

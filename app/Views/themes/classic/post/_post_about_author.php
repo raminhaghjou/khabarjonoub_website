@@ -4,7 +4,7 @@
             <div class="about-author">
                 <div class="about-author-left">
                     <a href="<?= generateProfileURL($postUser->slug); ?>" class="author-link">
-                        <img src="<?= getUserAvatar($postUser->avatar); ?>" alt="" class="img-responsive img-author">
+                        <img src="<?= getUserAvatar($postUser->avatar); ?>" alt="<?= esc($postUser->username); ?>" class="img-responsive img-author">
                     </a>
                 </div>
                 <div class="about-author-right">
