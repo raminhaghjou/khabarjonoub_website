@@ -4,6 +4,8 @@ use CodeIgniter\Model;
 
 class FileModel extends BaseModel
 {
+    public $uploadModel;
+
     public function __construct()
     {
         parent::__construct();
@@ -262,12 +264,120 @@ class FileModel extends BaseModel
         $this->uploadModel->deleteChunkedUpload($uploadId);
     }
 
+    private function sanitizeMediaDisplayName($rawName, string $fallback): string
+    {
+        $name = trim((string) $rawName);
+        if ($name === '') {
+            return $fallback;
+        }
+        if (\function_exists('mb_convert_encoding')) {
+            $name = @mb_convert_encoding($name, 'UTF-8', 'UTF-8');
+        }
+        // Strip 4-byte UTF-8 sequences (emojis etc.) so MySQL 3-byte utf8 columns never reject the insert
+        $stripped = @preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $name);
+        if (is_string($stripped)) {
+            $name = $stripped;
+        }
+        $name = (string) preg_replace('/[\x00-\x1F\x7F]/', '', $name);
+        $name = trim($name);
+        if ($name === '') {
+            return $fallback;
+        }
+        $ext = (string) pathinfo($name, PATHINFO_EXTENSION);
+        $maxLen = 190;
+        $curLen = \function_exists('mb_strlen') ? mb_strlen($name, 'UTF-8') : strlen($name);
+        if ($curLen > $maxLen) {
+            $suffix = $ext !== '' ? ('.' . $ext) : '';
+            $keep = max(20, $maxLen - strlen($suffix));
+            $base = \function_exists('mb_substr') ? mb_substr($name, 0, $keep, 'UTF-8') : substr($name, 0, $keep);
+            $name = rtrim($base, '. ') . $suffix;
+        }
+        return $name !== '' ? $name : $fallback;
+    }
+
+    private function insertMediaRow(string $table, array $preferredData): bool
+    {
+        $db = \Config\Database::connect(null, false);
+        try {
+            $columns = $db->query('SHOW COLUMNS FROM `' . $table . '`')->getResultArray();
+            $colMap = [];
+            foreach ($columns as $col) {
+                if (!empty($col['Field'])) {
+                    $colMap[$col['Field']] = $col;
+                }
+            }
+
+            $insertData = [];
+            foreach ($preferredData as $k => $v) {
+                if (isset($colMap[$k])) {
+                    $insertData[$k] = $v;
+                }
+            }
+
+            if (isset($colMap['id'])) {
+                $idCol = $colMap['id'];
+                $isAuto = stripos((string) ($idCol['Extra'] ?? ''), 'auto_increment') !== false;
+                if (!$isAuto) {
+                    try {
+                        if (empty($idCol['Key'])) {
+                            @$db->query('ALTER TABLE `' . $table . '` ADD PRIMARY KEY (`id`)');
+                        }
+                        @$db->query('ALTER TABLE `' . $table . '` MODIFY `id` INT(11) NOT NULL AUTO_INCREMENT');
+                        $recheck = $db->query("SHOW COLUMNS FROM `{$table}` LIKE 'id'")->getRowArray();
+                        if (!empty($recheck)) {
+                            $isAuto = stripos((string) ($recheck['Extra'] ?? ''), 'auto_increment') !== false;
+                        }
+                    } catch (\Throwable $ignore) {
+                    }
+                    if (!$isAuto) {
+                        $nextRow = $db->query('SELECT COALESCE(MAX(`id`), 0) + 1 AS next_id FROM `' . $table . '`')->getRowArray();
+                        $insertData['id'] = (int) ($nextRow['next_id'] ?? 1);
+                    }
+                }
+            }
+
+            foreach ($colMap as $field => $meta) {
+                if ($field === 'id' || array_key_exists($field, $insertData)) {
+                    continue;
+                }
+                $nullable = strtoupper((string) ($meta['Null'] ?? 'YES')) === 'YES';
+                $hasDefault = ($meta['Default'] ?? null) !== null;
+                $isAuto = stripos((string) ($meta['Extra'] ?? ''), 'auto_increment') !== false;
+                if (!$nullable && !$hasDefault && !$isAuto) {
+                    $type = strtolower((string) ($meta['Type'] ?? ''));
+                    if (preg_match('/int|decimal|float|double|numeric|bit/', $type)) {
+                        $insertData[$field] = 0;
+                    } elseif (strpos($type, 'datetime') !== false || strpos($type, 'timestamp') !== false) {
+                        $insertData[$field] = date('Y-m-d H:i:s');
+                    } elseif (strpos($type, 'date') !== false) {
+                        $insertData[$field] = date('Y-m-d');
+                    } else {
+                        $insertData[$field] = '';
+                    }
+                }
+            }
+
+            $ok = $db->table($table)->insert($insertData);
+            return (bool) $ok;
+        } catch (\Throwable $e) {
+            throw $e;
+        }
+    }
+
     public function saveChunkedUpload($uploadType, $uploadId, $originalName, $totalChunks = 0)
     {
-        $uploadType = cleanStr($uploadType);
+        $uploadType = strtolower(trim((string) $uploadType));
         if (!in_array($uploadType, ['file', 'video'], true)) {
+            $this->uploadModel->lastChunkError = 'نوع آپلود نامعتبر است';
             return false;
         }
+
+        $activeUser = user();
+        $userId = (!empty($activeUser) && isset($activeUser->id)) ? (int) $activeUser->id : 1;
+        $useS3 = !empty($this->generalSettings)
+            && ($this->generalSettings->storage ?? '') === 'aws_s3'
+            && !empty($this->generalSettings->aws_bucket)
+            && !empty($this->generalSettings->aws_key);
 
         if ($uploadType === 'video') {
             $file = $this->uploadModel->finalizeChunkedUpload($uploadId, $originalName, 'videos', 'video_', false, $totalChunks);
@@ -275,17 +385,44 @@ class FileModel extends BaseModel
                 return false;
             }
             $storage = 'local';
-            if ($this->generalSettings->storage == 'aws_s3') {
-                $awsModel = new AwsModel();
-                $awsModel->uploadFile($file['path']);
-                $storage = 'aws_s3';
+            if ($useS3) {
+                try {
+                    $awsModel = new AwsModel();
+                    $awsModel->uploadFile($file['path']);
+                    $storage = 'aws_s3';
+                } catch (\Throwable $e) {
+                    @unlink(FCPATH . $file['path']);
+                    $this->uploadModel->lastChunkError = 'خطا در انتقال به فضای ابری: ' . $e->getMessage();
+                    return false;
+                }
             }
-            $this->builderVideos->insert([
-                'video_name' => $file['orjName'],
-                'video_path' => $file['path'],
-                'user_id' => user()->id,
-                'storage' => $storage
-            ]);
+
+            $displayName = $this->sanitizeMediaDisplayName($file['orjName'] ?? '', $file['name']);
+            try {
+                $inserted = $this->insertMediaRow('videos', [
+                    'video_name' => $displayName,
+                    'video_path' => $file['path'],
+                    'user_id' => $userId,
+                    'storage' => $storage,
+                ]);
+            } catch (\Throwable $e) {
+                if ($storage === 'local') {
+                    @unlink(FCPATH . $file['path']);
+                }
+                $this->uploadModel->lastChunkError = 'خطای ثبت ویدیو در دیتابیس: ' . $e->getMessage();
+                log_message('error', 'saveChunkedUpload(video) DB error: ' . $e->getMessage());
+                return false;
+            }
+
+            if (!$inserted) {
+                if ($storage === 'local') {
+                    @unlink(FCPATH . $file['path']);
+                }
+                $this->uploadModel->lastChunkError = 'ثبت رکورد ویدیو در دیتابیس انجام نشد';
+                return false;
+            }
+
+            $this->uploadModel->deleteChunkedUpload($uploadId);
             return true;
         }
 
@@ -298,9 +435,10 @@ class FileModel extends BaseModel
                 return strtolower($item);
             }, $extArray);
         }
-        $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        $ext = strtolower((string) pathinfo((string) $originalName, PATHINFO_EXTENSION));
         if (!empty($extArray) && !in_array($ext, $extArray, true)) {
             $this->uploadModel->deleteChunkedUpload($uploadId);
+            $this->uploadModel->lastChunkError = 'پسوند فایل مجاز نیست';
             return false;
         }
 
@@ -309,17 +447,44 @@ class FileModel extends BaseModel
             return false;
         }
         $storage = 'local';
-        if ($this->generalSettings->storage == 'aws_s3') {
-            $awsModel = new AwsModel();
-            $awsModel->uploadFile($file['path']);
-            $storage = 'aws_s3';
+        if ($useS3) {
+            try {
+                $awsModel = new AwsModel();
+                $awsModel->uploadFile($file['path']);
+                $storage = 'aws_s3';
+            } catch (\Throwable $e) {
+                @unlink(FCPATH . $file['path']);
+                $this->uploadModel->lastChunkError = 'خطا در انتقال فایل به فضای ابری: ' . $e->getMessage();
+                return false;
+            }
         }
-        $this->builderFiles->insert([
-            'file_name' => $file['orjName'],
-            'file_path' => $file['path'],
-            'user_id' => user()->id,
-            'storage' => $storage
-        ]);
+
+        $displayName = $this->sanitizeMediaDisplayName($file['orjName'] ?? '', $file['name']);
+        try {
+            $inserted = $this->insertMediaRow('files', [
+                'file_name' => $displayName,
+                'file_path' => $file['path'],
+                'user_id' => $userId,
+                'storage' => $storage,
+            ]);
+        } catch (\Throwable $e) {
+            if ($storage === 'local') {
+                @unlink(FCPATH . $file['path']);
+            }
+            $this->uploadModel->lastChunkError = 'خطای ثبت فایل در دیتابیس: ' . $e->getMessage();
+            log_message('error', 'saveChunkedUpload(file) DB error: ' . $e->getMessage());
+            return false;
+        }
+
+        if (!$inserted) {
+            if ($storage === 'local') {
+                @unlink(FCPATH . $file['path']);
+            }
+            $this->uploadModel->lastChunkError = 'ثبت رکورد فایل در دیتابیس انجام نشد';
+            return false;
+        }
+
+        $this->uploadModel->deleteChunkedUpload($uploadId);
         return true;
     }
 

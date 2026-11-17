@@ -246,6 +246,100 @@ class UploadModel extends BaseModel
         ];
     }
 
+    private function cleanupStaleChunkDirs(int $maxAgeSeconds = 21600): void
+    {
+        $cutoff = time() - $maxAgeSeconds;
+        foreach ($this->chunkBaseDirs() as $base) {
+            if (!is_dir($base)) {
+                continue;
+            }
+            foreach (@scandir($base) ?: [] as $entry) {
+                if ($entry === '.' || $entry === '..' || $entry === '.htaccess' || $entry === 'index.html') {
+                    continue;
+                }
+                $sub = $base . $entry;
+                if (!is_dir($sub)) {
+                    continue;
+                }
+                $mtime = (int) @filemtime($sub);
+                if ($mtime > 0 && $mtime < $cutoff) {
+                    foreach (@glob($sub . '/*') ?: [] as $f) {
+                        if (is_file($f)) {
+                            @unlink($f);
+                        }
+                    }
+                    @rmdir($sub);
+                }
+            }
+        }
+    }
+
+    private function resolveWritableTargetDir(string $targetFolder): ?array
+    {
+        $ym = date('Ym');
+        $candidates = [
+            'uploads/' . $targetFolder . '/' . $ym . '/',
+            'uploads/' . $targetFolder . '/',
+        ];
+
+        $existingSubdirs = @glob(FCPATH . 'uploads/' . $targetFolder . '/*', GLOB_ONLYDIR) ?: [];
+        if (!empty($existingSubdirs)) {
+            rsort($existingSubdirs);
+            foreach ($existingSubdirs as $absSub) {
+                $subName = basename($absSub);
+                if ($subName !== '' && $subName[0] !== '_') {
+                    $candidates[] = 'uploads/' . $targetFolder . '/' . $subName . '/';
+                }
+            }
+        }
+
+        $candidates[] = 'uploads/files/' . $ym . '/';
+        $candidates[] = 'uploads/images/' . $ym . '/';
+        $candidates[] = 'uploads/';
+
+        foreach ($candidates as $relDir) {
+            $absDir = FCPATH . $relDir;
+            if (!is_dir($absDir)) {
+                @mkdir($absDir, 0775, true);
+            }
+            if (!is_dir($absDir) || !is_writable($absDir)) {
+                continue;
+            }
+            $probe = $absDir . '.write_test_' . uniqid('', true);
+            if (@file_put_contents($probe, '1') !== false) {
+                @unlink($probe);
+                if (!is_file($absDir . 'index.html') && is_file(FCPATH . 'uploads/index.html')) {
+                    @copy(FCPATH . 'uploads/index.html', $absDir . 'index.html');
+                }
+                return ['baseDir' => $relDir, 'targetDir' => $absDir];
+            }
+        }
+
+        return null;
+    }
+
+    private function safeSlugName(string $raw): string
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return '';
+        }
+        if (\function_exists('mb_convert_encoding')) {
+            $raw = @mb_convert_encoding($raw, 'UTF-8', 'UTF-8');
+        }
+        $slug = @preg_replace('/[^\p{L}\p{N}_-]+/u', '-', $raw);
+        if (!is_string($slug)) {
+            $slug = preg_replace('/[^a-zA-Z0-9_-]+/', '-', $raw);
+        }
+        $slug = trim((string) $slug, '-_');
+        if (\function_exists('mb_substr')) {
+            $slug = mb_substr($slug, 0, 80, 'UTF-8');
+        } else {
+            $slug = substr($slug, 0, 80);
+        }
+        return trim($slug, '-_');
+    }
+
     private function chunkUploadDir($uploadId): string
     {
         $bases = $this->chunkBaseDirs();
@@ -344,6 +438,10 @@ class UploadModel extends BaseModel
             return $this->chunkFailure('فایل موقت آپلود معتبر نیست');
         }
 
+        if ($chunkIndex === 0) {
+            $this->cleanupStaleChunkDirs();
+        }
+
         $dir = $this->chunkUploadDir($uploadId);
         if ($dir === '') {
             return $this->chunkFailure('پوشه ذخیره قطعه قابل نوشتن نیست');
@@ -414,26 +512,28 @@ class UploadModel extends BaseModel
             }
         }
 
-        $orjName = !empty($originalName) ? $originalName : ('file_' . $uploadId);
-        $name = pathinfo($orjName, PATHINFO_FILENAME);
-        $ext = pathinfo($orjName, PATHINFO_EXTENSION);
-        $name = strSlug($name);
-        if (empty($name)) {
-            $name = generateToken();
-        }
-        if (empty($ext)) {
-            $ext = 'bin';
+        $orjName = !empty($originalName) ? (string) $originalName : ('file_' . $uploadId);
+        $rawExt = (string) pathinfo($orjName, PATHINFO_EXTENSION);
+        $ext = strtolower((string) preg_replace('/[^a-zA-Z0-9]/', '', $rawExt));
+        if ($ext === '') {
+            $ext = ($targetFolder === 'videos') ? 'mp4' : 'bin';
         }
 
-        $directory = $this->createUploadDirectory($targetFolder);
-        $baseDir = 'uploads/' . $targetFolder . '/' . $directory;
-        $targetDir = FCPATH . $baseDir;
-        if (!is_dir($targetDir) && !@mkdir($targetDir, 0755, true) && !is_dir($targetDir)) {
+        $resolved = $this->resolveWritableTargetDir($targetFolder);
+        if ($resolved === null) {
+            $this->lastChunkError = 'پوشه uploads/' . $targetFolder . ' روی سرور دسترسی نوشتن ندارد (chmod 775 لازم است)';
             return null;
         }
+        $baseDir = $resolved['baseDir'];
+        $targetDir = $resolved['targetDir'];
 
         $uniqiName = $namePrefix . generateToken() . '.' . $ext;
         if ($keepOrjName === true) {
+            $rawBase = (string) pathinfo($orjName, PATHINFO_FILENAME);
+            $name = $this->safeSlugName($rawBase);
+            if ($name === '') {
+                $name = generateToken();
+            }
             $fullName = $name . '.' . $ext;
             if (file_exists($targetDir . $fullName)) {
                 $fullName = $name . '-' . uniqid() . '.' . $ext;
@@ -442,25 +542,64 @@ class UploadModel extends BaseModel
         }
 
         $finalPath = $targetDir . $uniqiName;
-        $out = @fopen($finalPath, 'wb');
+        $assemblingPath = $finalPath . '.assembling_' . uniqid();
+        $out = @fopen($assemblingPath, 'wb');
         if ($out === false) {
-            $this->lastChunkError = 'فایل نهایی ویدیو ساخته نشد';
+            $this->lastChunkError = 'ساخت فایل نهایی در ' . $baseDir . ' ممکن نشد';
             return null;
         }
+
         foreach ($parts as $part) {
             $in = @fopen($part, 'rb');
             if ($in === false) {
-                fclose($out);
-                @unlink($finalPath);
+                @fclose($out);
+                @unlink($assemblingPath);
                 $this->lastChunkError = 'خواندن یکی از قطعه‌ها ممکن نشد';
                 return null;
             }
-            stream_copy_to_stream($in, $out);
-            fclose($in);
+            while (!feof($in)) {
+                $buf = @fread($in, 1048576);
+                if ($buf === false) {
+                    @fclose($in);
+                    @fclose($out);
+                    @unlink($assemblingPath);
+                    $this->lastChunkError = 'خطا در خواندن داده قطعه';
+                    return null;
+                }
+                $len = strlen($buf);
+                if ($len > 0) {
+                    $written = @fwrite($out, $buf);
+                    if ($written === false || $written !== $len) {
+                        @fclose($in);
+                        @fclose($out);
+                        @unlink($assemblingPath);
+                        $this->lastChunkError = 'نوشتن فایل نهایی کامل نشد (فضای دیسک را بررسی کنید)';
+                        return null;
+                    }
+                }
+            }
+            @fclose($in);
         }
-        fclose($out);
+        @fclose($out);
 
-        $this->deleteChunkedUpload($uploadId);
+        if (is_file($finalPath)) {
+            @unlink($finalPath);
+        }
+        if (!@rename($assemblingPath, $finalPath)) {
+            if (!@copy($assemblingPath, $finalPath)) {
+                @unlink($assemblingPath);
+                $this->lastChunkError = 'انتقال فایل نهایی ویدیو انجام نشد';
+                return null;
+            }
+            @unlink($assemblingPath);
+        }
+        @chmod($finalPath, 0644);
+
+        if (!is_file($finalPath) || (int) @filesize($finalPath) <= 0) {
+            @unlink($finalPath);
+            $this->lastChunkError = 'فایل نهایی ویدیو خالی یا نامعتبر است';
+            return null;
+        }
 
         return [
             'name' => $uniqiName,

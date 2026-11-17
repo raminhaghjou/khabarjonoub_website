@@ -1,6 +1,6 @@
 <?php namespace App\Models;
 
-require APPPATH . 'ThirdParty/aws-sdk/vendor/autoload.php';
+require_once APPPATH . 'ThirdParty/aws-sdk/vendor/autoload.php';
 
 use CodeIgniter\Model;
 use Aws\S3\S3Client;

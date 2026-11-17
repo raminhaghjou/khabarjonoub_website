@@ -12,7 +12,7 @@
     }
 
     var DEFAULTS = {
-        chunkSize: 256 * 1024, // small enough for restrictive PHP/proxy limits
+        chunkSize: 256 * 1024, // proven 256KB chunk size on khabarjonoub Nginx/PHP-FPM
         retries: 5,
         timeout: 90000,             // 90s per chunk
         uploadUrl: null,
@@ -120,7 +120,13 @@
             activeXhr.done(function (res) {
                 var d = parseResponse(res);
                 if (!d || Number(d.status) !== 1) {
-                    onChunkFail(item, idx, attempt, (d && d.message) ? d.message : 'bad response');
+                    var msg = (d && d.message) ? d.message : 'bad response';
+                    if (d && typeof d.retryable !== 'undefined' && Number(d.retryable) === 0) {
+                        console.error('chunk upload failed', msg);
+                        onError(item.elId, msg);
+                        return;
+                    }
+                    onChunkFail(item, idx, attempt, msg);
                     return;
                 }
                 var pct = Math.round(((idx + 1) / item.total) * 100);
@@ -139,7 +145,8 @@
                 if ((!body || !body.message) && xhr && xhr.status) {
                     reason += ' (' + xhr.status + ')';
                 }
-                var retryable = !xhr || !xhr.status || xhr.status >= 500 || status === 'timeout';
+                var noRetry = body && typeof body.retryable !== 'undefined' && Number(body.retryable) === 0;
+                var retryable = !noRetry && (!xhr || !xhr.status || xhr.status === 502 || xhr.status === 503 || xhr.status === 504 || status === 'timeout');
                 if (!retryable) {
                     console.error('chunk upload failed', reason);
                     onError(item.elId, reason);

@@ -192,13 +192,20 @@ class FileController extends BaseAdminController
 
     private function prepareUploadRequest()
     {
-        @ignore_user_abort(true);
-        @set_time_limit(600);
+        // Prevent PHP 8.x deprecations/notices/warnings from being converted into fatal ErrorExceptions in CI4 development mode
+        @error_reporting(E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR);
+        @ini_set('display_errors', '0');
+        if (\function_exists('ignore_user_abort')) {
+            @ignore_user_abort(true);
+        }
+        if (\function_exists('set_time_limit')) {
+            @set_time_limit(600);
+        }
         @ini_set('max_execution_time', '600');
         @ini_set('max_input_time', '600');
         @ini_set('memory_limit', '512M');
         if (session_status() === PHP_SESSION_ACTIVE) {
-            session_write_close();
+            @session_write_close();
         }
     }
 
@@ -257,35 +264,46 @@ class FileController extends BaseAdminController
                 $message = trim((string) ($this->fileModel->uploadModel->lastChunkError ?? ''));
                 if ($message === '') {
                     $fileError = $_FILES['file']['error'] ?? 'none';
-                    $message = 'Chunk save failed [v3 file=' . $fileError . ']';
+                    $message = 'Chunk save failed [v4 file=' . $fileError . ']';
                 }
-                return $this->response->setStatusCode(400)->setJSON(['status' => 0, 'message' => $message, 'handler' => 'v3']);
+                return $this->response->setStatusCode(400)->setJSON([
+                    'status' => 0,
+                    'retryable' => 0,
+                    'message' => $message,
+                    'handler' => 'v4'
+                ]);
             }
 
             if ($chunkIndex < $totalChunks - 1) {
                 return $this->response->setJSON([
                     'status' => 1,
                     'done' => 0,
-                    'chunk_index' => $chunkIndex
+                    'chunk_index' => $chunkIndex,
+                    'handler' => 'v4'
                 ]);
             }
 
             $ok = $this->fileModel->saveChunkedUpload($uploadType, $uploadId, $fileName, $totalChunks);
             if (!$ok) {
                 $message = trim((string) ($this->fileModel->uploadModel->lastChunkError ?? ''));
-                $this->fileModel->clearChunkedUpload($uploadId);
                 return $this->response->setStatusCode(400)->setJSON([
                     'status' => 0,
+                    'retryable' => 0,
                     'message' => $message !== '' ? $message : 'Finalize failed',
-                    'handler' => 'v3'
+                    'handler' => 'v4'
                 ]);
             }
 
-            return $this->response->setJSON(['status' => 1, 'done' => 1]);
+            return $this->response->setJSON(['status' => 1, 'done' => 1, 'handler' => 'v4']);
         } catch (\Throwable $e) {
-            log_message('error', 'FileController::uploadChunk: ' . $e->getMessage());
-            $this->fileModel->clearChunkedUpload($uploadId);
-            return $this->response->setStatusCode(500)->setJSON(['status' => 0, 'message' => 'Chunk upload error']);
+            $detail = $e->getMessage() . ' [' . basename($e->getFile()) . ':' . $e->getLine() . ']';
+            log_message('error', 'FileController::uploadChunk: ' . $detail);
+            return $this->response->setStatusCode(500)->setJSON([
+                'status' => 0,
+                'retryable' => 0,
+                'message' => 'خطای سرور هنگام ذخیره ویدیو: ' . $detail,
+                'handler' => 'v4'
+            ]);
         }
     }
 
