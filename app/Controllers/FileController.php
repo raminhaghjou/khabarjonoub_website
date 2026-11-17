@@ -308,6 +308,68 @@ class FileController extends BaseAdminController
     }
 
     /**
+     * Upload diagnostics (admin only): open /FileController/uploadDiag in the browser while logged in.
+     */
+    public function uploadDiag()
+    {
+        @error_reporting(E_ERROR | E_PARSE);
+        @ini_set('display_errors', '0');
+        $out = [];
+        $out['handler_version'] = 'v4';
+        $out['php_version'] = PHP_VERSION;
+        $out['sapi'] = PHP_SAPI;
+        $out['user'] = function_exists('posix_getpwuid') ? (@posix_getpwuid(@posix_geteuid())['name'] ?? '?') : get_current_user();
+        $out['environment'] = ENVIRONMENT;
+        $out['file_controller_mtime'] = date('Y-m-d H:i:s', @filemtime(__FILE__));
+        $out['file_controller_path'] = __FILE__;
+        $out['opcache_enabled'] = function_exists('opcache_get_status') ? (bool) (@opcache_get_status(false)['opcache_enabled'] ?? false) : false;
+        $out['opcache_validate_timestamps'] = ini_get('opcache.validate_timestamps');
+        $out['opcache_revalidate_freq'] = ini_get('opcache.revalidate_freq');
+        $out['upload_max_filesize'] = ini_get('upload_max_filesize');
+        $out['post_max_size'] = ini_get('post_max_size');
+        $out['memory_limit'] = ini_get('memory_limit');
+        $out['max_execution_time'] = ini_get('max_execution_time');
+        $out['sys_temp_dir'] = sys_get_temp_dir();
+        $out['sys_temp_writable'] = is_writable(sys_get_temp_dir());
+        $out['disk_free_mb'] = round((float) @disk_free_space(FCPATH) / 1048576);
+
+        $dirs = [
+            'WRITEPATH' => WRITEPATH,
+            'WRITEPATH/chunk-uploads' => WRITEPATH . 'chunk-uploads',
+            'uploads' => FCPATH . 'uploads',
+            'uploads/videos' => FCPATH . 'uploads/videos',
+            'uploads/tmp' => FCPATH . 'uploads/tmp',
+        ];
+        foreach ($dirs as $label => $dir) {
+            $exists = is_dir($dir);
+            $canWrite = false;
+            if ($exists) {
+                $probe = rtrim($dir, '/\\') . DIRECTORY_SEPARATOR . '.diag_' . uniqid();
+                $canWrite = @file_put_contents($probe, 'x') !== false;
+                @unlink($probe);
+            }
+            $out['dirs'][$label] = ['exists' => $exists, 'writable_real_test' => $canWrite];
+        }
+
+        try {
+            $db = \Config\Database::connect(null, false);
+            $out['db_charset'] = $db->getPlatform() . ' / ' . ($db->charset ?? '');
+            foreach (['videos', 'files'] as $table) {
+                $cols = [];
+                foreach ($db->query('SHOW COLUMNS FROM `' . $db->DBPrefix . $table . '`')->getResultArray() as $c) {
+                    $cols[] = $c['Field'] . ' ' . $c['Type'] . ($c['Null'] === 'NO' ? ' NOT NULL' : '') . ($c['Extra'] ? ' ' . $c['Extra'] : '') . ($c['Default'] !== null ? ' default=' . $c['Default'] : '');
+                }
+                $out['table_' . $table] = $cols;
+            }
+        } catch (\Throwable $e) {
+            $out['db_error'] = $e->getMessage() . ' [' . basename($e->getFile()) . ':' . $e->getLine() . ']';
+        }
+
+        return $this->response->setHeader('Content-Type', 'application/json; charset=utf-8')
+            ->setBody(json_encode($out, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    /**
      * Get Files
      */
     public function getFiles()
