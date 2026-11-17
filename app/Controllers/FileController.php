@@ -254,8 +254,12 @@ class FileController extends BaseAdminController
         try {
             $saved = $this->fileModel->receiveUploadChunk('file', $uploadId, $chunkIndex);
             if (!$saved) {
-                $message = $this->fileModel->uploadModel->lastChunkError ?: 'Chunk save failed';
-                return $this->response->setStatusCode(400)->setJSON(['status' => 0, 'message' => $message]);
+                $message = trim((string) ($this->fileModel->uploadModel->lastChunkError ?? ''));
+                if ($message === '') {
+                    $fileError = $_FILES['file']['error'] ?? 'none';
+                    $message = 'Chunk save failed [v3 file=' . $fileError . ']';
+                }
+                return $this->response->setStatusCode(400)->setJSON(['status' => 0, 'message' => $message, 'handler' => 'v3']);
             }
 
             if ($chunkIndex < $totalChunks - 1) {
@@ -268,8 +272,13 @@ class FileController extends BaseAdminController
 
             $ok = $this->fileModel->saveChunkedUpload($uploadType, $uploadId, $fileName, $totalChunks);
             if (!$ok) {
+                $message = trim((string) ($this->fileModel->uploadModel->lastChunkError ?? ''));
                 $this->fileModel->clearChunkedUpload($uploadId);
-                return $this->response->setStatusCode(400)->setJSON(['status' => 0, 'message' => 'Finalize failed']);
+                return $this->response->setStatusCode(400)->setJSON([
+                    'status' => 0,
+                    'message' => $message !== '' ? $message : 'Finalize failed',
+                    'handler' => 'v3'
+                ]);
             }
 
             return $this->response->setJSON(['status' => 1, 'done' => 1]);

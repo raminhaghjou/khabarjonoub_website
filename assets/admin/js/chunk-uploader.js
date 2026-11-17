@@ -12,7 +12,7 @@
     }
 
     var DEFAULTS = {
-        chunkSize: 512 * 1024, // stays under common 1MB/2MB PHP upload limits
+        chunkSize: 256 * 1024, // small enough for restrictive PHP/proxy limits
         retries: 5,
         timeout: 90000,             // 90s per chunk
         uploadUrl: null,
@@ -96,7 +96,7 @@
             var start = idx * opts.chunkSize;
             var end = Math.min(start + opts.chunkSize, item.file.size);
             var fd = new FormData();
-            fd.append('file', item.file.slice(start, end), item.file.name);
+            fd.append('file', item.file.slice(start, end), 'chunk.bin');
             fd.append('upload_type', opts.uploadType);
             fd.append('upload_id', item.uploadId);
             fd.append('chunk_index', idx);

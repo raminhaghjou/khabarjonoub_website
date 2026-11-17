@@ -237,9 +237,40 @@ class UploadModel extends BaseModel
         return $directory . '/';
     }
 
+    private function chunkBaseDirs(): array
+    {
+        return [
+            rtrim(WRITEPATH, '/\\') . '/chunk-uploads/',
+            FCPATH . 'uploads/videos/_chunks/',
+            FCPATH . 'uploads/tmp/chunks/',
+        ];
+    }
+
     private function chunkUploadDir($uploadId): string
     {
-        return FCPATH . 'uploads/tmp/chunks/' . $uploadId . '/';
+        $bases = $this->chunkBaseDirs();
+        foreach ($bases as $base) {
+            $existing = $base . $uploadId . '/';
+            if (is_dir($existing) && is_writable($existing)) {
+                return $existing;
+            }
+        }
+        foreach ($bases as $base) {
+            if (!is_dir($base)) {
+                @mkdir($base, 0775, true);
+            }
+            if (!is_dir($base) || !is_writable($base)) {
+                continue;
+            }
+            $dir = $base . $uploadId . '/';
+            if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+                continue;
+            }
+            if (is_dir($dir) && is_writable($dir)) {
+                return $dir;
+            }
+        }
+        return '';
     }
 
     private function readChunkMeta(string $dir): array
@@ -287,7 +318,7 @@ class UploadModel extends BaseModel
         return 'ذخیره قطعه ناموفق بود';
     }
 
-    //append each chunk into one data.bin so finalize is a fast rename/copy
+    //store each chunk as its own file; order is applied only when the upload is finalized
     public function saveUploadChunk($inputName, $uploadId, $chunkIndex)
     {
         $this->lastChunkError = '';
@@ -314,84 +345,36 @@ class UploadModel extends BaseModel
         }
 
         $dir = $this->chunkUploadDir($uploadId);
-        if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
-            return $this->chunkFailure('پوشه موقت آپلود ساخته نشد');
-        }
-        if (!is_writable($dir)) {
-            return $this->chunkFailure('پوشه موقت آپلود قابل نوشتن نیست');
+        if ($dir === '') {
+            return $this->chunkFailure('پوشه ذخیره قطعه قابل نوشتن نیست');
         }
 
-        $lock = @fopen($dir . 'write.lock', 'c');
-        if ($lock === false || !@flock($lock, LOCK_EX)) {
-            if ($lock !== false) {
-                fclose($lock);
-            }
-            return $this->chunkFailure('قفل نوشتن قطعه برقرار نشد');
-        }
-
-        try {
-            $meta = $this->readChunkMeta($dir);
-            $next = (int) ($meta['next'] ?? 0);
-            if ($chunkIndex < $next) {
-                return true;
-            }
-            if ($chunkIndex !== $next) {
-                return $this->chunkFailure('ترتیب قطعه‌ها نادرست است');
-            }
-
-            $partPath = $dir . $chunkIndex . '.part';
-            if (is_file($partPath)) {
-                @unlink($partPath);
-            }
-            if (!@move_uploaded_file($tmpName, $partPath) && !@copy($tmpName, $partPath)) {
-                return $this->chunkFailure('ذخیره قطعه روی دیسک انجام نشد');
-            }
-            if (!is_file($partPath)) {
-                return $this->chunkFailure('قطعه بعد از ذخیره پیدا نشد');
-            }
-
-            $dataPath = $dir . 'data.bin';
-            $beforeSize = is_file($dataPath) ? (int) filesize($dataPath) : 0;
-            $in = @fopen($partPath, 'rb');
-            $out = @fopen($dataPath, 'ab');
-            if ($in === false || $out === false) {
-                if ($in !== false) {
-                    fclose($in);
-                }
-                if ($out !== false) {
-                    fclose($out);
-                }
-                return $this->chunkFailure('باز کردن فایل ویدیو برای نوشتن ممکن نشد');
-            }
-
-            $copied = @stream_copy_to_stream($in, $out);
-            fclose($in);
-            fclose($out);
-            if ($copied === false) {
-                $fh = @fopen($dataPath, 'c+b');
-                if ($fh) {
-                    @ftruncate($fh, $beforeSize);
-                    fclose($fh);
-                }
-                return $this->chunkFailure('چسباندن قطعه به ویدیو ناموفق بود');
-            }
-
-            $meta['next'] = $chunkIndex + 1;
-            if (!$this->writeChunkMeta($dir, $meta)) {
-                $fh = @fopen($dataPath, 'c+b');
-                if ($fh) {
-                    @ftruncate($fh, $beforeSize);
-                    fclose($fh);
-                }
-                return $this->chunkFailure('ثبت وضعیت قطعه ناموفق بود');
-            }
-
-            @unlink($partPath);
+        $dest = $dir . $chunkIndex . '.part';
+        $incomingSize = (int) ($upload['size'] ?? 0);
+        if (is_file($dest) && $incomingSize > 0 && (int) filesize($dest) === $incomingSize) {
             return true;
-        } finally {
-            @flock($lock, LOCK_UN);
-            @fclose($lock);
         }
+
+        $tempDest = $dir . $chunkIndex . '.uploading';
+        if (is_file($tempDest)) {
+            @unlink($tempDest);
+        }
+        $moved = @move_uploaded_file($tmpName, $tempDest);
+        if (!$moved) {
+            $moved = @copy($tmpName, $tempDest);
+        }
+        if (!$moved || !is_file($tempDest)) {
+            $last = error_get_last();
+            return $this->chunkFailure('ذخیره قطعه انجام نشد: ' . ($last['message'] ?? 'disk write failed'));
+        }
+        if (is_file($dest)) {
+            @unlink($dest);
+        }
+        if (!@rename($tempDest, $dest)) {
+            @unlink($tempDest);
+            return $this->chunkFailure('جایگزینی قطعه انجام نشد');
+        }
+        return true;
     }
 
     //move assembled data.bin (or legacy .part files) into the final uploads folder
@@ -399,30 +382,34 @@ class UploadModel extends BaseModel
     {
         $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) $uploadId);
         $dir = $this->chunkUploadDir($uploadId);
-        if ($uploadId === '' || !is_dir($dir)) {
+        if ($uploadId === '' || $dir === '' || !is_dir($dir)) {
+            $this->lastChunkError = 'قطعات آپلود پیدا نشد';
             return null;
         }
 
-        $dataPath = $dir . 'data.bin';
-        $meta = $this->readChunkMeta($dir);
-        $assembled = is_file($dataPath);
         $parts = [];
-
-        if ($assembled) {
-            if ($totalChunks > 0 && (int) ($meta['next'] ?? 0) < $totalChunks) {
-                log_message('error', 'Chunk finalize incomplete for ' . $uploadId);
-                return null;
+        $totalChunks = (int) $totalChunks;
+        if ($totalChunks > 0) {
+            for ($i = 0; $i < $totalChunks; $i++) {
+                $part = $dir . $i . '.part';
+                if (!is_file($part)) {
+                    $this->lastChunkError = 'قطعه ' . $i . ' کامل نشده است';
+                    log_message('error', 'Missing chunk ' . $i . ' for ' . $uploadId);
+                    return null;
+                }
+                $parts[] = $part;
             }
         } else {
-            // Legacy fallback: many .part files from older uploader
-            $parts = glob($dir . '*.part') ?: [];
-            if (empty($parts)) {
-                return null;
+            $dataPath = $dir . 'data.bin';
+            if (is_file($dataPath)) {
+                $parts = [$dataPath];
+            } else {
+                $parts = glob($dir . '*.part') ?: [];
+                natsort($parts);
+                $parts = array_values($parts);
             }
-            natsort($parts);
-            $parts = array_values($parts);
-            if ($totalChunks > 0 && count($parts) < $totalChunks) {
-                log_message('error', 'Chunk finalize incomplete for ' . $uploadId);
+            if (empty($parts)) {
+                $this->lastChunkError = 'هیچ قطعه‌ای برای ساخت فایل نیست';
                 return null;
             }
         }
@@ -455,30 +442,23 @@ class UploadModel extends BaseModel
         }
 
         $finalPath = $targetDir . $uniqiName;
-        if ($assembled) {
-            if (!@rename($dataPath, $finalPath)) {
-                if (!@copy($dataPath, $finalPath)) {
-                    return null;
-                }
-                @unlink($dataPath);
-            }
-        } else {
-            $out = @fopen($finalPath, 'wb');
-            if ($out === false) {
+        $out = @fopen($finalPath, 'wb');
+        if ($out === false) {
+            $this->lastChunkError = 'فایل نهایی ویدیو ساخته نشد';
+            return null;
+        }
+        foreach ($parts as $part) {
+            $in = @fopen($part, 'rb');
+            if ($in === false) {
+                fclose($out);
+                @unlink($finalPath);
+                $this->lastChunkError = 'خواندن یکی از قطعه‌ها ممکن نشد';
                 return null;
             }
-            foreach ($parts as $part) {
-                $in = @fopen($part, 'rb');
-                if ($in === false) {
-                    fclose($out);
-                    @unlink($finalPath);
-                    return null;
-                }
-                stream_copy_to_stream($in, $out);
-                fclose($in);
-            }
-            fclose($out);
+            stream_copy_to_stream($in, $out);
+            fclose($in);
         }
+        fclose($out);
 
         $this->deleteChunkedUpload($uploadId);
 
@@ -497,18 +477,18 @@ class UploadModel extends BaseModel
         if ($uploadId === '') {
             return;
         }
-        $dir = $this->chunkUploadDir($uploadId);
-        if (!is_dir($dir)) {
-            $legacy = FCPATH . 'uploads/tmp/chunks/' . $uploadId . '.part';
-            if (is_file($legacy)) {
-                @unlink($legacy);
+        foreach ($this->chunkBaseDirs() as $base) {
+            $dir = $base . $uploadId . '/';
+            if (!is_dir($dir)) {
+                continue;
             }
-            return;
+            foreach (glob($dir . '*') ?: [] as $file) {
+                if (is_file($file)) {
+                    @unlink($file);
+                }
+            }
+            @rmdir($dir);
         }
-        foreach (glob($dir . '*') ?: [] as $file) {
-            @unlink($file);
-        }
-        @rmdir($dir);
     }
 
     //check allowed file types
