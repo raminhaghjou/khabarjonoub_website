@@ -69,7 +69,6 @@ $routes->post('close-cookies-warning-post', 'AjaxController::closeCookiesWarning
 $routes->post('FileController/uploadChunk', 'FileController::uploadChunk');
 $routes->post('FileController/uploadFile', 'FileController::uploadFile');
 $routes->post('FileController/uploadVideo', 'FileController::uploadVideo');
-$routes->get('FileController/uploadDiag', 'FileController::uploadDiag');
 
 /*
  * --------------------------------------------------------------------
