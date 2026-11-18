@@ -189,26 +189,67 @@ class PostModel extends BaseModel
         return $this->builder->where('tags.tag_slug', cleanStr($tagSlug))->countAllResults();
     }
 
+    //build search keyword variants (#hashtag, "_" as space, Arabic/Persian yeh & kaf)
+    private function getSearchVariants($q)
+    {
+        $q = trim((string) $q);
+        $q = trim(ltrim($q, '#'));
+        if ($q === '') {
+            return [];
+        }
+        $bases = [$q];
+        if (strpos($q, '_') !== false) {
+            $bases[] = trim(str_replace('_', ' ', $q));
+        }
+        $variants = [];
+        foreach ($bases as $base) {
+            $variants[] = $base;
+            //arabic -> persian
+            $variants[] = str_replace(["\xD9\x8A", "\xD9\x89", "\xD9\x83"], ["\xDB\x8C", "\xDB\x8C", "\xDA\xA9"], $base);
+            //persian -> arabic
+            $variants[] = str_replace(["\xDB\x8C", "\xDA\xA9"], ["\xD9\x8A", "\xD9\x83"], $base);
+        }
+        return array_values(array_unique(array_filter($variants, function ($v) {
+            return $v !== '';
+        })));
+    }
+
+    //apply search conditions: title, summary, (content) and tags
+    private function applySearchConditions($q, $searchInContent)
+    {
+        $variants = $this->getSearchVariants($q);
+        if (empty($variants)) {
+            $this->builder->where('1 = 0', null, false);
+            return;
+        }
+        $tagsTable = $this->db->prefixTable('tags');
+        $tagConditions = [];
+        $this->builder->groupStart();
+        foreach ($variants as $variant) {
+            $this->builder->orLike('posts.title', $variant)->orLike('posts.summary', $variant);
+            if ($searchInContent) {
+                $this->builder->orLike('posts.content', $variant);
+            }
+            $tagConditions[] = "ts.tag LIKE '%" . $this->db->escapeLikeString($variant) . "%' ESCAPE '!'";
+        }
+        $this->builder->orWhere('posts.id IN (SELECT ts.post_id FROM `' . $tagsTable . '` ts WHERE ' . implode(' OR ', $tagConditions) . ')', null, false);
+        $this->builder->groupEnd();
+    }
+
     //get search posts count
     public function getSearchPostsCount($q, $searchInContent)
     {
         $this->buildQuery();
-        $this->builder->groupStart()->like('posts.title', $q)->orLike('posts.summary', $q);
-        if ($searchInContent) {
-            $this->builder->orLike('posts.content', $q);
-        }
-        return $this->builder->groupEnd()->countAllResults();
+        $this->applySearchConditions($q, $searchInContent);
+        return $this->builder->countAllResults();
     }
 
     //get paginated search posts
     public function getSearchPostsPaginated($q, $searchInContent, $perPage, $offset)
     {
         $this->buildQuery();
-        $this->builder->groupStart()->like('posts.title', $q)->orLike('posts.summary', $q);
-        if ($searchInContent) {
-            $this->builder->orLike('posts.content', $q);
-        }
-        return $this->builder->groupEnd()->orderBy('posts.created_at DESC')->limit($perPage, $offset)->get()->getResult();
+        $this->applySearchConditions($q, $searchInContent);
+        return $this->builder->orderBy('posts.created_at DESC')->limit($perPage, $offset)->get()->getResult();
     }
 
     //get user posts count

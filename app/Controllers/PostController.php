@@ -91,7 +91,9 @@ class PostController extends BaseAdminController
                 $this->postAdminModel->updateSlug($postId);
                 //add post tags
                 $tagModel = new TagModel();
-                $tagModel->addPostTags($postId, inputPost('tags'));
+                if (!$tagModel->addPostTags($postId, inputPost('tags'))) {
+                    $this->session->setFlashdata('error', esc(trans("tags") . ': ' . $tagModel->lastError));
+                }
 
                 if ($postType == 'article') {
                     $this->postAdminModel->addPostAdditionalImages($postId);
@@ -197,7 +199,9 @@ class PostController extends BaseAdminController
                 $this->postAdminModel->updateSlug($postId);
                 //edit tags
                 $tagModel = new TagModel();
-                $tagModel->editPostTags($postId);
+                if (!$tagModel->editPostTags($postId)) {
+                    $this->session->setFlashdata('error', esc(trans("tags") . ': ' . $tagModel->lastError));
+                }
 
                 if ($postType == 'article') {
                     $this->postAdminModel->addPostAdditionalImages($postId);

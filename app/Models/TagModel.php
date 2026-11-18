@@ -10,58 +10,162 @@ class TagModel extends BaseModel
         $this->builder = $this->db->table('tags');
     }
 
+    /**
+     * Last error message produced by the tag save methods ('' when everything is fine).
+     */
+    public $lastError = '';
+
+    /**
+     * Normalize the raw tag input (comma separated string or array) into a clean unique list.
+     * Supports Persian/Arabic commas, semicolons, new lines, "#hashtags" and "_" as word separator.
+     *
+     * @return array<int, array{tag:string, slug:string}>
+     */
+    public function parseTags($raw)
+    {
+        if (is_array($raw)) {
+            $raw = implode(',', $raw);
+        }
+        $raw = (string) $raw;
+        if (trim($raw) === '') {
+            return [];
+        }
+        $raw = strip_tags($raw);
+        $raw = str_replace(["\xD8\x8C", "\xD8\x9B", ';', "\r\n", "\n", "\r", "\t"], ',', $raw);
+
+        $result = [];
+        $seen = [];
+        foreach (explode(',', $raw) as $tag) {
+            $tag = (string) $tag;
+            // utf8 (3-byte) database: 4-byte characters (emoji) would break the insert
+            $tag = preg_replace('/[\x{10000}-\x{10FFFF}]/u', '', $tag);
+            // control / zero width marks except ZWNJ (U+200C) which is needed in Persian
+            $tag = preg_replace('/[\x00-\x1F\x7F\x{200B}\x{200D}\x{200E}\x{200F}\x{FEFF}]/u', '', (string) $tag);
+            $tag = str_replace('_', ' ', (string) $tag);
+            $tag = preg_replace('/\s+/u', ' ', (string) $tag);
+            $tag = trim((string) $tag);
+            $tag = ltrim($tag, "# \t");
+            $tag = trim($tag);
+            if ($tag === '' || mb_strlen($tag, 'UTF-8') < 2) {
+                continue;
+            }
+            if (mb_strlen($tag, 'UTF-8') > 100) {
+                $tag = mb_substr($tag, 0, 100, 'UTF-8');
+            }
+            $slug = strSlug($tag);
+            if (empty($slug) || $slug == '-') {
+                $slug = 'tag-' . substr(md5($tag), 0, 10);
+            }
+            if (isset($seen[$slug])) {
+                continue;
+            }
+            $seen[$slug] = true;
+            $result[] = ['tag' => $tag, 'slug' => $slug];
+            if (count($result) >= 50) {
+                break;
+            }
+        }
+        return $result;
+    }
+
     //add post tags
     public function addPostTags($postId, $tags)
     {
-        $tags = strTrim($tags);
-        if (!empty($tags)) {
-            $tagsArray = explode(',', $tags);
-            if (!empty($tagsArray)) {
-                foreach ($tagsArray as $tag) {
-                    if (!empty($tag)) {
-                        $tag = strTrim($tag);
-                        if (strlen($tag) > 1) {
-                            $data = [
-                                'post_id' => cleanNumber($postId),
-                                'tag' => strTrim($tag),
-                                'tag_slug' => strSlug(strTrim($tag))
-                            ];
-                            if (empty($data["tag_slug"]) || $data["tag_slug"] == "-") {
-                                $data["tag_slug"] = "tag-" . uniqid();
-                            }
-                            $this->builder->insert($data);
-                        }
-                    }
-                }
-            }
-        }
+        return $this->savePostTags($postId, $tags, false);
     }
 
     //edit post tags
     public function editPostTags($postId)
     {
-        $this->deletePostTags($postId);
-        $tags = inputPost('tags');
-        if (!empty($tags)) {
-            $tagsArray = explode(",", $tags);
-            if (!empty($tagsArray)) {
-                foreach ($tagsArray as $tag) {
-                    if (!empty($tag)) {
-                        $tag = strTrim($tag);
-                        if (strlen($tag) > 1) {
-                            $data = [
-                                'post_id' => cleanNumber($postId),
-                                'tag' => $tag,
-                                'tag_slug' => strSlug($tag)
-                            ];
-                            if (empty($data['tag_slug']) || $data['tag_slug'] == '-') {
-                                $data['tag_slug'] = 'tag-' . uniqid();
-                            }
-                            $this->builder->insert($data);
-                        }
-                    }
-                }
+        $raw = \Config\Services::request()->getPost('tags');
+        if ($raw === null) {
+            // field was not submitted at all: keep the current tags untouched
+            return true;
+        }
+        return $this->savePostTags($postId, $raw, true);
+    }
+
+    /**
+     * Save tags of a post. Returns true on success, false on failure (see $this->lastError).
+     */
+    public function savePostTags($postId, $raw, $replace = false)
+    {
+        $this->lastError = '';
+        $postId = (int) $postId;
+        if ($postId < 1) {
+            return true;
+        }
+        $tags = $this->parseTags($raw);
+        $db = \Config\Database::connect(null, false);
+        try {
+            $table = $db->DBPrefix . 'tags';
+            $manualIds = !$this->ensureTagsTable($db, $table);
+            $db->transBegin();
+            if ($replace) {
+                $db->table('tags')->where('post_id', $postId)->delete();
             }
+            $nextId = 0;
+            if ($manualIds && !empty($tags)) {
+                $row = $db->query('SELECT COALESCE(MAX(id), 0) AS m FROM `' . $table . '`')->getRow();
+                $nextId = (int) ($row->m ?? 0) + 1;
+            }
+            foreach ($tags as $item) {
+                $data = [
+                    'post_id' => $postId,
+                    'tag' => $item['tag'],
+                    'tag_slug' => $item['slug'],
+                ];
+                if ($manualIds) {
+                    $data['id'] = $nextId++;
+                }
+                $db->table('tags')->insert($data);
+            }
+            $db->transCommit();
+            return true;
+        } catch (\Throwable $e) {
+            try {
+                $db->transRollback();
+            } catch (\Throwable $ignored) {
+            }
+            $this->lastError = $e->getMessage() . ' [' . basename($e->getFile()) . ':' . $e->getLine() . ']';
+            log_message('error', 'TagModel::savePostTags(post ' . $postId . '): ' . $this->lastError);
+            return false;
+        }
+    }
+
+    /**
+     * Make sure the tags table has the expected columns and an AUTO_INCREMENT id.
+     * Returns true when ids are generated by MySQL, false when ids must be assigned manually.
+     */
+    private function ensureTagsTable($db, $table)
+    {
+        $cols = [];
+        foreach ($db->query('SHOW COLUMNS FROM `' . $table . '`')->getResultArray() as $c) {
+            $cols[$c['Field']] = $c;
+        }
+        $required = [
+            'post_id' => 'INT NULL',
+            'tag' => 'VARCHAR(255) NULL',
+            'tag_slug' => 'VARCHAR(255) NULL',
+        ];
+        foreach ($required as $name => $definition) {
+            if (!isset($cols[$name])) {
+                $db->query('ALTER TABLE `' . $table . '` ADD COLUMN `' . $name . '` ' . $definition);
+            }
+        }
+        if (!isset($cols['id'])) {
+            return false;
+        }
+        if (stripos((string) ($cols['id']['Extra'] ?? ''), 'auto_increment') !== false) {
+            return true;
+        }
+        try {
+            $db->query('UPDATE `' . $table . '` SET id = (SELECT m FROM (SELECT COALESCE(MAX(id), 0) + 1 AS m FROM `' . $table . '`) t) WHERE id = 0');
+            $db->query('ALTER TABLE `' . $table . '` MODIFY `id` INT NOT NULL AUTO_INCREMENT');
+            return true;
+        } catch (\Throwable $e) {
+            log_message('error', 'TagModel::ensureTagsTable could not repair AUTO_INCREMENT: ' . $e->getMessage());
+            return false;
         }
     }
 
@@ -94,7 +198,7 @@ class TagModel extends BaseModel
     //get posts tags
     public function getPostTags($postId)
     {
-        return $this->builder->where('post_id', cleanNumber($postId))->get()->getResult();
+        return $this->builder->where('post_id', cleanNumber($postId))->orderBy('id', 'ASC')->get()->getResult();
     }
 
     //get posts tags string
