@@ -85,7 +85,7 @@
             <div class="sidebar-widget">
                 <div class="widget-head"><h4 class="title"><?= esc($widget->title); ?></h4></div>
                 <div class="widget-body">
-                    <?= $widget->content; ?>
+                    <?= getWidgetContent($widget); ?>
                 </div>
             </div>
         <?php endif;

@@ -159,14 +159,9 @@ class TagModel extends BaseModel
         if (stripos((string) ($cols['id']['Extra'] ?? ''), 'auto_increment') !== false) {
             return true;
         }
-        try {
-            $db->query('UPDATE `' . $table . '` SET id = (SELECT m FROM (SELECT COALESCE(MAX(id), 0) + 1 AS m FROM `' . $table . '`) t) WHERE id = 0');
-            $db->query('ALTER TABLE `' . $table . '` MODIFY `id` INT NOT NULL AUTO_INCREMENT');
-            return true;
-        } catch (\Throwable $e) {
-            log_message('error', 'TagModel::ensureTagsTable could not repair AUTO_INCREMENT: ' . $e->getMessage());
-            return false;
-        }
+        //No AUTO_INCREMENT: never alter the big table on a normal request, assign ids manually
+        //(fix the table once with: ALTER TABLE tags ADD PRIMARY KEY (id), MODIFY id INT NOT NULL AUTO_INCREMENT;)
+        return false;
     }
 
     //get popular tags

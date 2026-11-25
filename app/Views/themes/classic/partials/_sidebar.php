@@ -101,7 +101,7 @@ if (!empty($baseWidgets)):
                                 <h4 class="title"><?= esc($widget->title); ?></h4>
                             </div>
                             <div class="widget-body">
-                                <?= $widget->content; ?>
+                                <?= getWidgetContent($widget); ?>
                             </div>
                         </div>
                     </div>

@@ -1442,6 +1442,62 @@ if (!function_exists('getWidget')) {
     }
 }
 
+//get widget content (supports scheduled versions of custom widgets)
+if (!function_exists('getWidgetContent')) {
+    function getWidgetContent($widget)
+    {
+        $default = isset($widget->content) ? $widget->content : '';
+        if (empty($widget) || empty($widget->id)) {
+            return $default;
+        }
+        try {
+            static $rowsByWidget = null;
+            if ($rowsByWidget === null) {
+                $data = getCachedData('widget_schedules');
+                if (!is_array($data) || !isset($data['rows'])) {
+                    $model = new \App\Models\WidgetScheduleModel();
+                    $data = ['rows' => $model->getFrontRows(date('Y-m-d H:i:s'))];
+                    setCacheData('widget_schedules', $data);
+                }
+                $rowsByWidget = $data['rows'];
+            }
+            if (empty($rowsByWidget[(int) $widget->id])) {
+                return $default;
+            }
+            $now = date('Y-m-d H:i:s');
+            $best = null;
+            foreach ($rowsByWidget[(int) $widget->id] as $row) {
+                if ($row['publish_at'] <= $now) {
+                    if ($best === null || $row['publish_at'] > $best['publish_at'] || ($row['publish_at'] == $best['publish_at'] && $row['id'] > $best['id'])) {
+                        $best = $row;
+                    }
+                }
+            }
+            return $best !== null ? $best['content'] : $default;
+        } catch (\Throwable $e) {
+            //table missing or any other problem: never break the page, show the widget's own content
+            $rowsByWidget = [];
+            return $default;
+        }
+    }
+}
+
+//reset cached widget schedules (all languages)
+if (!function_exists('resetWidgetSchedulesCache')) {
+    function resetWidgetSchedulesCache()
+    {
+        try {
+            $cache = \Config\Services::cache();
+            $languages = \Config\Database::connect()->table('languages')->select('id')->get()->getResult();
+            foreach ($languages as $language) {
+                $cache->delete('widget_schedules_lang' . $language->id);
+            }
+        } catch (\Throwable $e) {
+            log_message('error', 'resetWidgetSchedulesCache: ' . $e->getMessage());
+        }
+    }
+}
+
 //get category widgets
 if (!function_exists('getCategoryWidgets')) {
     function getCategoryWidgets($categoryId, $baseWidgets, $adSpaces, $langId)

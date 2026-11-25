@@ -15,6 +15,7 @@ use App\Models\PostModel;
 use App\Models\RewardModel;
 use App\Models\SettingsModel;
 use App\Models\SitemapModel;
+use App\Models\WidgetScheduleModel;
 
 class AdminController extends BaseAdminController
 {
@@ -446,9 +447,109 @@ class AdminController extends BaseAdminController
         $categoryModel = new CategoryModel();
         $data['categories'] = $categoryModel->getParentCategories();
 
+        //scheduled content (custom widgets only)
+        $data['scheduleEnabled'] = false;
+        if ($data['widget']->is_custom == 1 && $data['widget']->type == 'custom') {
+            try {
+                $scheduleModel = new WidgetScheduleModel();
+                $scheduleModel->ensureTable();
+                $data['schedules'] = $scheduleModel->getSchedules($data['widget']->id);
+                $data['activeScheduleId'] = $scheduleModel->getActiveScheduleId($data['schedules']);
+                $editSchedule = null;
+                $editScheduleId = (int) cleanNumber(inputGet('schedule'));
+                if ($editScheduleId > 0) {
+                    $editSchedule = $scheduleModel->getSchedule($editScheduleId);
+                    if (!empty($editSchedule) && (int) $editSchedule->widget_id !== (int) $data['widget']->id) {
+                        $editSchedule = null;
+                    }
+                }
+                $data['scheduleForm'] = $scheduleModel->getFormValues($editSchedule);
+                $data['scheduleNowText'] = $scheduleModel->formatJalali(date('Y-m-d H:i:s'));
+                $data['scheduleModel'] = $scheduleModel;
+                $data['scheduleEnabled'] = true;
+            } catch (\Throwable $e) {
+                log_message('error', 'AdminController::editWidget schedule: ' . $e->getMessage());
+                $data['scheduleError'] = $e->getMessage();
+            }
+        }
+
         echo view('admin/includes/_header', $data);
         echo view('admin/widget/edit', $data);
         echo view('admin/includes/_footer');
+    }
+
+    /**
+     * Save (add / update) a scheduled content version of a widget
+     */
+    public function saveWidgetSchedulePost()
+    {
+        checkPermission('widgets');
+        if (strtolower($this->request->getMethod()) !== 'post') {
+            return redirect()->to(adminUrl('widgets'));
+        }
+        $widgetId = (int) cleanNumber(inputPost('widget_id'));
+        $widget = $this->settingsModel->getWidget($widgetId);
+        if (empty($widget) || $widget->is_custom != 1 || $widget->type != 'custom') {
+            $this->session->setFlashdata('error', trans("msg_error"));
+            return redirect()->to(adminUrl('widgets'));
+        }
+        $backUrl = adminUrl('edit-widget/' . $widget->id);
+        $scheduleId = (int) cleanNumber(inputPost('schedule_id'));
+        try {
+            $model = new WidgetScheduleModel();
+            $model->ensureTable();
+            $publishAt = $model->jalaliToDateTime(inputPost('jy'), inputPost('jm'), inputPost('jd'), inputPost('jh'), inputPost('ji'));
+            if (empty($publishAt)) {
+                $this->session->setFlashdata('error', esc($model->lastError));
+                return redirect()->to($backUrl . ($scheduleId > 0 ? '?schedule=' . $scheduleId : '') . '#widget_schedule_box');
+            }
+            $content = $this->request->getPost('content');
+            if (!$model->hasContent($content)) {
+                $this->session->setFlashdata('error', 'محتوای نسخه خالی است. عکس یا متن را وارد کنید.');
+                return redirect()->to($backUrl . ($scheduleId > 0 ? '?schedule=' . $scheduleId : '') . '#widget_schedule_box');
+            }
+            $savedId = $model->saveSchedule($widget->id, $scheduleId, $content, $publishAt);
+            if (empty($savedId)) {
+                $this->session->setFlashdata('error', esc($model->lastError ?: trans("msg_error")));
+                return redirect()->to($backUrl . '#widget_schedule_box');
+            }
+            resetWidgetSchedulesCache();
+            resetCacheDataOnChange();
+            $this->session->setFlashdata('success', 'نسخه ذخیره شد و از ' . esc($model->formatJalali($publishAt)) . ' نمایش داده می‌شود.');
+        } catch (\Throwable $e) {
+            log_message('error', 'AdminController::saveWidgetSchedulePost: ' . $e->getMessage());
+            $this->session->setFlashdata('error', esc($e->getMessage()));
+        }
+        return redirect()->to($backUrl . '#widget_schedule_box');
+    }
+
+    /**
+     * Delete a scheduled content version of a widget
+     */
+    public function deleteWidgetSchedulePost()
+    {
+        checkPermission('widgets');
+        if (strtolower($this->request->getMethod()) !== 'post') {
+            return redirect()->to(adminUrl('widgets'));
+        }
+        $widgetId = (int) cleanNumber(inputPost('widget_id'));
+        $scheduleId = (int) cleanNumber(inputPost('schedule_id'));
+        $widget = $this->settingsModel->getWidget($widgetId);
+        if (empty($widget) || $widget->type != 'custom') {
+            $this->session->setFlashdata('error', trans("msg_error"));
+            return redirect()->to(adminUrl('widgets'));
+        }
+        try {
+            $model = new WidgetScheduleModel();
+            $model->deleteSchedule($scheduleId, $widget->id);
+            resetWidgetSchedulesCache();
+            resetCacheDataOnChange();
+            $this->session->setFlashdata('success', trans("msg_deleted"));
+        } catch (\Throwable $e) {
+            log_message('error', 'AdminController::deleteWidgetSchedulePost: ' . $e->getMessage());
+            $this->session->setFlashdata('error', esc($e->getMessage()));
+        }
+        return redirect()->to(adminUrl('edit-widget/' . $widget->id) . '#widget_schedule_box');
     }
 
     /**
@@ -490,6 +591,13 @@ class AdminController extends BaseAdminController
             }
         } else {
             if ($this->settingsModel->deleteWidget($id)) {
+                try {
+                    $scheduleModel = new WidgetScheduleModel();
+                    $scheduleModel->deleteByWidget($id);
+                    resetWidgetSchedulesCache();
+                } catch (\Throwable $e) {
+                    //schedule table may not exist: nothing to clean
+                }
                 $this->session->setFlashdata('success', trans("msg_deleted"));
                 resetCacheDataOnChange();
             } else {

@@ -112,6 +112,23 @@
     </div>
 </div>
 
+<?php if (!empty($scheduleEnabled)):
+    echo view('admin/widget/_schedule_box', [
+        'widget' => $widget,
+        'schedules' => $schedules,
+        'activeScheduleId' => $activeScheduleId,
+        'scheduleForm' => $scheduleForm,
+        'scheduleNowText' => $scheduleNowText,
+        'scheduleModel' => $scheduleModel,
+    ]);
+elseif (!empty($scheduleError)): ?>
+    <div class="row">
+        <div class="col-lg-8 col-md-12">
+            <div class="alert alert-warning">بخش زمان‌بندی محتوا در دسترس نیست: <?= esc($scheduleError); ?></div>
+        </div>
+    </div>
+<?php endif; ?>
+
 <script>
     var arrayTrans = JSON.parse('<?= json_encode($latestPostsTrans); ?>');
 
